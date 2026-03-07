@@ -479,7 +479,10 @@ def main():
 
         send_results = []
         if not args.dry_run:
-            send_results = send_wecom(args.webhook, md)
+            # 兜底：有时外部传入的 webhook 会被误拼（例如重复域名 qyapi.weixin.qqapi.weixin.qq.com）
+            # 这里做一次“明显错误”的自动修复，避免 DNS 解析失败导致整天不送达。
+            fixed_webhook = args.webhook.replace("qyapi.weixin.qqapi.weixin.qq.com", "qyapi.weixin.qq.com")
+            send_results = send_wecom(fixed_webhook, md)
 
         # 最终执行汇报（不回显正文）
         report_lines.append(f"日报期号/URL：{daily_id} {daily_url}")
