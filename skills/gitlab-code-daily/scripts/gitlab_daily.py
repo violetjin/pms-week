@@ -13,10 +13,11 @@ Usage (example):
   python3 gitlab_daily.py \
     --base-url https://gitlab.example.com \
     --token $GITLAB_TOKEN \
-    --project-id 123 --project-id 456 \
-    --date 2026-03-09 --tz Asia/Shanghai \
+    --group sacp --group lxits \
+    --users-file users.txt \
+    --from 2026-03-01 --to 2026-03-09 --tz Asia/Shanghai \
     --work-start 09:00 --work-end 19:00 \
-    --out daily.json
+    --out report.json
 
 Notes:
 - Token may be omitted if using env var GITLAB_TOKEN.
@@ -121,6 +122,20 @@ def fetch_project(base_api: str, token: str, project_id: int) -> Dict[str, Any]:
     return data
 
 
+def discover_group_projects(base_api: str, token: str, group: str) -> List[int]:
+    # group can be numeric id or full path; for full path must be URL-encoded
+    g_enc = urllib.parse.quote(group, safe="")
+    url = f"{base_api}/groups/{g_enc}/projects?include_subgroups=true"
+    projs = paged_get(url, token)
+    ids: List[int] = []
+    for p in projs:
+        try:
+            ids.append(int(p.get("id")))
+        except Exception:
+            pass
+    return ids
+
+
 def fetch_commits(base_api: str, token: str, project_id: int, since_iso: str, until_iso: str) -> List[Dict[str, Any]]:
     url = f"{base_api}/projects/{project_id}/repository/commits?since={urllib.parse.quote(since_iso)}&until={urllib.parse.quote(until_iso)}"
     return paged_get(url, token)
@@ -166,8 +181,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", required=True, help="GitLab base URL, e.g. https://gitlab.example.com")
     ap.add_argument("--token", default=os.environ.get("GITLAB_TOKEN", ""), help="GitLab token (or env GITLAB_TOKEN)")
-    ap.add_argument("--project-id", action="append", type=int, required=True)
-    ap.add_argument("--date", required=True, help="YYYY-MM-DD")
+    ap.add_argument("--project-id", action="append", type=int, help="Project id (repeatable). If omitted, use --group to discover projects")
+    ap.add_argument("--group", action="append", default=[], help="Group full path or numeric id (repeatable), used to discover all projects")
+    ap.add_argument("--users-file", help="File with GitLab usernames (one per line); only include these users")
+    ap.add_argument("--user", action="append", default=[], help="GitLab username to include (repeatable)")
+    ap.add_argument("--from", dest="date_from", required=True, help="YYYY-MM-DD (inclusive)")
+    ap.add_argument("--to", dest="date_to", required=True, help="YYYY-MM-DD (inclusive)")
     ap.add_argument("--tz", default="Asia/Shanghai")
     ap.add_argument("--work-start", default="09:00")
     ap.add_argument("--work-end", default="19:00")
@@ -182,11 +201,43 @@ def main() -> int:
         return 2
 
     base_api = args.base_url.rstrip("/") + "/api/v4"
-    since_iso, until_iso = local_window_to_utc(args.date, args.tz, args.work_start, args.work_end)
+    # Resolve date range into UTC window [from 00:00 local .. to+1 00:00 local) but keep work window per-day when bucketing.
+    date_from = dt.date.fromisoformat(args.date_from)
+    date_to = dt.date.fromisoformat(args.date_to)
+    if date_to < date_from:
+        raise SystemExit("--to must be >= --from")
 
-    commits_by_author: Dict[str, List[Commit]] = collections.defaultdict(list)
+    # For API commit fetch we query whole day ranges; later we keep only those inside the work window per day.
+    since_iso, _ = local_window_to_utc(args.date_from, args.tz, "00:00", "23:59")
+    _, until_iso = local_window_to_utc((date_to + dt.timedelta(days=1)).isoformat(), args.tz, "00:00", "00:01")
 
-    for pid in args.project_id:
+    commits_by_user: Dict[str, List[Commit]] = collections.defaultdict(list)
+
+    # Load allowed usernames
+    allow_users = set(u.strip() for u in (args.user or []) if u.strip())
+    if args.users_file:
+        with open(args.users_file, "r", encoding="utf-8") as f:
+            for line in f:
+                u = line.strip()
+                if u and not u.startswith("#"):
+                    allow_users.add(u)
+    if not allow_users:
+        raise SystemExit("No target users provided; pass --users-file or --user")
+
+    project_ids: List[int] = []
+    if args.project_id:
+        project_ids.extend(args.project_id)
+
+    if args.group:
+        # Discover projects under groups
+        for g in args.group:
+            project_ids.extend(discover_group_projects(base_api, args.token, g))
+
+    project_ids = sorted(set(project_ids))
+    if not project_ids:
+        raise SystemExit("No projects selected; pass --project-id or --group")
+
+    for pid in project_ids:
         proj = fetch_project(base_api, args.token, pid)
         pname = proj.get("path_with_namespace", str(pid))
         raw_commits = fetch_commits(base_api, args.token, pid, since_iso, until_iso)
@@ -194,6 +245,14 @@ def main() -> int:
             sha = rc.get("id")
             detail = fetch_commit_detail(base_api, args.token, pid, sha)
             stats = detail.get("stats") or {}
+
+            # GitLab may include author_email/name; username might not be directly present.
+            # Prefer committer/author email->username mapping if present in detail['committer_email'] etc.
+            # In practice for your use case, enforce that commit author email matches GitLab user email.
+            username = (detail.get("author") or {}).get("username") if isinstance(detail.get("author"), dict) else ""
+            if not username:
+                username = rc.get("author_name") or detail.get("author_name") or ""
+
             c = Commit(
                 project_id=pid,
                 project_name=pname,
@@ -207,27 +266,44 @@ def main() -> int:
                 total=int(stats.get("total") or 0),
                 web_url=detail.get("web_url") or "",
             )
-            key = c.author_email or c.author_name or "unknown"
-            commits_by_author[key].append(c)
+
+            # Filter to work-window per day
+            adt_local = c.authored_dt().astimezone(ZoneInfo(args.tz)) if ZoneInfo else c.authored_dt()
+            if not (date_from <= adt_local.date() <= date_to):
+                continue
+            ws = parse_hhmm(args.work_start)
+            we = parse_hhmm(args.work_end)
+            t = adt_local.time()
+            if not (ws <= t <= we):
+                continue
+
+            if username not in allow_users:
+                continue
+
+            commits_by_user[username].append(c)
         time.sleep(0.1)
 
     report: Dict[str, Any] = {
-        "date": args.date,
+        "date_range": {"from": args.date_from, "to": args.date_to},
         "tz": args.tz,
         "window": {"since_utc": since_iso, "until_utc": until_iso, "work_start": args.work_start, "work_end": args.work_end},
-        "authors": {},
+        "users": {},
     }
 
-    for author_key, commits in sorted(commits_by_author.items(), key=lambda kv: kv[0]):
+    for username in sorted(allow_users):
+        commits = commits_by_user.get(username, [])
         session_h = estimate_sessions(commits, args.session_gap_min, args.session_pad_min)
         churn_h = estimate_churn(commits, args.loc_per_hour)
         combined_h = max(session_h, churn_h)
-        report["authors"][author_key] = {
-            "author_key": author_key,
-            "author_name": commits[0].author_name if commits else "",
-            "author_email": commits[0].author_email if commits else "",
-            "counts": {"commits": len(commits), "loc_total": sum(c.total for c in commits)},
+        loc_total = sum(c.total for c in commits)
+        report["users"][username] = {
+            "username": username,
+            "counts": {"commits": len(commits), "loc_total": loc_total},
             "estimates_hours": {"session": round(session_h, 2), "churn": round(churn_h, 2), "combined": round(combined_h, 2)},
+            "efficiency": {
+                "loc_per_hour": round((loc_total / combined_h), 2) if combined_h > 0 else 0.0,
+                "commits_per_hour": round((len(commits) / combined_h), 2) if combined_h > 0 else 0.0,
+            },
             "commits": [c.__dict__ for c in sorted(commits, key=lambda x: x.authored_dt())],
         }
 

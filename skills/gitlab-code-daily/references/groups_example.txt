@@ -1,0 +1,18 @@
+# Example group identifiers (use group full path, not admin URL)
+# From admin URL like: https://gitlab.bdo.com.cn/admin/groups/sacp
+# Use: sacp
+sacp
+lxits
+bdo-sz
+lixin-soa
+fantasy
+product-group
+szdev
+tax
+train
+hr
+client-system
+belief
+python_project
+bdo-sz/openapigroup
+lxai
