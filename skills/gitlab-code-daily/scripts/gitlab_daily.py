@@ -246,12 +246,11 @@ def main() -> int:
             detail = fetch_commit_detail(base_api, args.token, pid, sha)
             stats = detail.get("stats") or {}
 
-            # GitLab may include author_email/name; username might not be directly present.
-            # Prefer committer/author email->username mapping if present in detail['committer_email'] etc.
-            # In practice for your use case, enforce that commit author email matches GitLab user email.
-            username = (detail.get("author") or {}).get("username") if isinstance(detail.get("author"), dict) else ""
-            if not username:
-                username = rc.get("author_name") or detail.get("author_name") or ""
+            # Map to username using your convention: username@bdo.com.cn
+            username = ""
+            author_email = (detail.get("author_email") or rc.get("author_email") or "").strip().lower()
+            if author_email.endswith("@bdo.com.cn"):
+                username = author_email.split("@", 1)[0]
 
             c = Commit(
                 project_id=pid,
