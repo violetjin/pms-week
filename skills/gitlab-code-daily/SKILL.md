@@ -19,13 +19,13 @@ This skill is designed for **on-prem/self-hosted GitLab**.
 
 - GitLab base URL, e.g. `https://gitlab.example.com`
 - Access method:
-  - **Preferred:** GitLab Personal Access Token (PAT) with `read_api` (and `read_repository` if fetching diffs/files)
-  - Or a project/group deploy token if allowed
+  - GitLab Personal Access Token (PAT) with `read_api` and `read_repository` (needed for diffs and repo clone)
 - Scope of report:
-  - Group(s) or project(s)
-  - Date (default: today in Asia/Shanghai) and work window (e.g. 09:00-19:00)
+  - **All projects** (discover via groups list or an allowlist)
+  - Date range (YYYY-MM-DD..YYYY-MM-DD) and work window (e.g. 09:00-19:00)
+  - Target users (GitLab usernames)
 - Identity mapping:
-  - GitLab username ↔ real name (if needed for reporting)
+  - GitLab **username** is the primary key; optionally map username → display name
 
 Never print tokens in logs or reports.
 
@@ -46,15 +46,26 @@ Never print tokens in logs or reports.
    - Combine: `max(session_estimate, churn_estimate*weight)` or report both.
 
 4. **Risk scan**
+   Languages: Java / Python / JavaScript / HTML.
+
    Minimum checks (fast, no repo clone needed if patch available):
    - Secret patterns: AWS keys, generic API keys, private keys, tokens in code/config
    - Dangerous calls/patterns (language dependent): `eval`, `exec`, shell injection, deserialization, SQL concat
    - Dependency risk hints: lockfile changes, version downgrades, new network-facing libs
    - Test signal: changes in core modules without test updates
 
-   Optional (if user has infra and agrees): integrate dedicated tools (gitleaks, semgrep) by cloning repos.
+   Integrate dedicated tools by cloning repos:
+   - **gitleaks** for secrets
+   - **semgrep** for code patterns (Java/Python/JS)
 
-5. **Generate report**
+5. **Efficiency & quality metrics**
+   Provide per-user metrics over a date range:
+   - Output: commits count, MR count (optional), LOC churn, active days
+   - Time estimate: session/churn/combined
+   - Efficiency: churn per hour, commits per hour (heuristic), cycle-time proxy (if MR data enabled)
+   - Quality: risk findings counts by severity; tests-touched ratio (if repo clone); revert/hotfix ratio
+
+6. **Generate report**
    - Per developer:
      - Summary bullets (what/where)
      - Time estimate + confidence (low/med/high)
