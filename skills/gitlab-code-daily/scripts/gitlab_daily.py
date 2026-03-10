@@ -191,18 +191,17 @@ def load_user_map(path: str) -> Dict[str, str]:
         f.close()
 
     for line in lines:
-        for line in f:
-            s = line.strip()
-            if not s or s.startswith("#"):
-                continue
-            if "|" in s:
-                a, n = s.split("|", 1)
-                a = a.strip()
-                n = n.strip()
-                if a:
-                    m[a] = n
-            else:
-                m[s] = ""
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if "|" in s:
+            a, n = s.split("|", 1)
+            a = a.strip()
+            n = n.strip()
+            if a:
+                m[a] = n
+        else:
+            m[s] = ""
     return m
 
 
