@@ -177,14 +177,62 @@ def estimate_churn(commits: List[Commit], loc_per_hour: int = 200, min_hours: fl
     return h
 
 
+def load_user_map(path: str) -> Dict[str, str]:
+    """Return account->name map from users.txt supporting 'account|name' lines."""
+    m: Dict[str, str] = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if "|" in s:
+                a, n = s.split("|", 1)
+                a = a.strip()
+                n = n.strip()
+                if a:
+                    m[a] = n
+            else:
+                m[s] = ""
+    return m
+
+
+def resolve_users(allow_map: Dict[str, str], queries: List[str]) -> List[str]:
+    """Resolve provided user queries (account or chinese name fuzzy) into accounts."""
+    accounts = list(allow_map.keys())
+    resolved: List[str] = []
+    for q in queries:
+        q = q.strip()
+        if not q:
+            continue
+        if q in allow_map:
+            resolved.append(q)
+            continue
+        # exact chinese name
+        exact = [a for a, n in allow_map.items() if n and n == q]
+        if exact:
+            resolved.extend(exact)
+            continue
+        # fuzzy substring in chinese name
+        fuzzy = [a for a, n in allow_map.items() if n and q in n]
+        resolved.extend(fuzzy)
+    # de-dup preserve order
+    out: List[str] = []
+    seen = set()
+    for a in resolved:
+        if a not in seen:
+            out.append(a)
+            seen.add(a)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", required=True, help="GitLab base URL, e.g. https://gitlab.example.com")
     ap.add_argument("--token", default=os.environ.get("GITLAB_TOKEN", ""), help="GitLab token (or env GITLAB_TOKEN)")
     ap.add_argument("--project-id", action="append", type=int, help="Project id (repeatable). If omitted, use --group to discover projects")
     ap.add_argument("--group", action="append", default=[], help="Group full path or numeric id (repeatable), used to discover all projects")
-    ap.add_argument("--users-file", help="File with GitLab usernames (one per line); only include these users")
-    ap.add_argument("--user", action="append", default=[], help="GitLab username to include (repeatable)")
+    ap.add_argument("--users-file", help="Allowlist file. Supports lines: 'account' or 'account|name'")
+    ap.add_argument("--user", action="append", default=[], help="User query to include (repeatable). Accepts account or Chinese name (fuzzy)")
     ap.add_argument("--from", dest="date_from", required=True, help="YYYY-MM-DD (inclusive)")
     ap.add_argument("--to", dest="date_to", required=True, help="YYYY-MM-DD (inclusive)")
     ap.add_argument("--tz", default="Asia/Shanghai")
@@ -193,12 +241,20 @@ def main() -> int:
     ap.add_argument("--session-gap-min", type=int, default=90)
     ap.add_argument("--session-pad-min", type=int, default=20)
     ap.add_argument("--loc-per-hour", type=int, default=200)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", help="Output path. If omitted, write to skills/gitlab-code-daily/logs/")
 
     args = ap.parse_args()
     if not args.token:
         print("Missing --token or env GITLAB_TOKEN", file=sys.stderr)
         return 2
+
+    # Default output path under skill logs
+    if not args.out:
+        import os
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "logs"))
+        os.makedirs(base_dir, exist_ok=True)
+        suffix = "_".join(sorted(set(args.user))) if args.user else "all"
+        args.out = os.path.join(base_dir, f"gitlab_daily_{args.date_from}_{args.date_to}_{suffix}.json")
 
     base_api = args.base_url.rstrip("/") + "/api/v4"
     # Resolve date range into UTC window [from 00:00 local .. to+1 00:00 local) but keep work window per-day when bucketing.
@@ -214,15 +270,21 @@ def main() -> int:
     commits_by_user: Dict[str, List[Commit]] = collections.defaultdict(list)
 
     # Load allowed usernames
-    allow_users = set(u.strip() for u in (args.user or []) if u.strip())
+    allow_map: Dict[str, str] = {}
     if args.users_file:
-        with open(args.users_file, "r", encoding="utf-8") as f:
-            for line in f:
-                u = line.strip()
-                if u and not u.startswith("#"):
-                    allow_users.add(u)
-    if not allow_users:
-        raise SystemExit("No target users provided; pass --users-file or --user")
+        allow_map = load_user_map(args.users_file)
+
+    if not allow_map:
+        raise SystemExit("Empty allowlist; check --users-file")
+
+    # If --user provided, resolve (account or chinese name fuzzy); otherwise include all in allowlist.
+    if args.user:
+        resolved = resolve_users(allow_map, args.user)
+        if not resolved:
+            raise SystemExit(f"No users matched queries: {args.user}")
+        allow_users = set(resolved)
+    else:
+        allow_users = set(allow_map.keys())
 
     project_ids: List[int] = []
     if args.project_id:
@@ -297,6 +359,7 @@ def main() -> int:
         loc_total = sum(c.total for c in commits)
         report["users"][username] = {
             "username": username,
+            "name": allow_map.get(username, ""),
             "counts": {"commits": len(commits), "loc_total": loc_total},
             "estimates_hours": {"session": round(session_h, 2), "churn": round(churn_h, 2), "combined": round(combined_h, 2)},
             "efficiency": {

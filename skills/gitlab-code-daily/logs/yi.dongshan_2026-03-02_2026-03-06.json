@@ -1,0 +1,215 @@
+{
+  "date_range": {
+    "from": "2026-03-02",
+    "to": "2026-03-06"
+  },
+  "tz": "Asia/Shanghai",
+  "window": {
+    "since_utc": "2026-03-01T16:00:00+00:00",
+    "until_utc": "2026-03-06T16:01:00+00:00",
+    "work_start": "09:00",
+    "work_end": "19:00"
+  },
+  "users": {
+    "yi.dongshan": {
+      "username": "yi.dongshan",
+      "counts": {
+        "commits": 14,
+        "loc_total": 63875
+      },
+      "estimates_hours": {
+        "session": 6.91,
+        "churn": 10.0,
+        "combined": 10.0
+      },
+      "efficiency": {
+        "loc_per_hour": 6387.5,
+        "commits_per_hour": 1.4
+      },
+      "commits": [
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "1f4ec5d77196f9dcb5b55a36d5eb42c80ec51238",
+          "title": "#43811 - 合并报表: 分析性复核对接清水",
+          "authored_date": "2026-03-02T10:08:13.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 55,
+          "deletions": 1,
+          "total": 56,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/1f4ec5d77196f9dcb5b55a36d5eb42c80ec51238"
+        },
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "b45508b58244073eda760ef434335b852d2c1cbf",
+          "title": "#43811 - 合并报表: 分析性复核对接清水",
+          "authored_date": "2026-03-02T11:04:54.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 1,
+          "deletions": 0,
+          "total": 1,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/b45508b58244073eda760ef434335b852d2c1cbf"
+        },
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "06d66429059a3574c72aba512eae3698bd7008b5",
+          "title": "#43909 - 合并报表: 导入抵销分录判断索引号,有则覆盖,否则新增",
+          "authored_date": "2026-03-02T18:54:42.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 121,
+          "deletions": 25,
+          "total": 146,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/06d66429059a3574c72aba512eae3698bd7008b5"
+        },
+        {
+          "project_id": 152,
+          "project_name": "sacp/faith-ui/faith-hb-ui",
+          "sha": "c3991b82d5f0107253acd200d2b20165a0a9029c",
+          "title": "#43909 - 合并报表: 导入抵销分录判断索引号,有则覆盖,否则新增",
+          "authored_date": "2026-03-02T18:59:58.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 53,
+          "deletions": 27,
+          "total": 80,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith-ui/faith-hb-ui/-/commit/c3991b82d5f0107253acd200d2b20165a0a9029c"
+        },
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "1ebb3deb591957a71e413313a97f459f94554fdd",
+          "title": "junit",
+          "authored_date": "2026-03-03T15:47:10.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 676,
+          "deletions": 86,
+          "total": 762,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/1ebb3deb591957a71e413313a97f459f94554fdd"
+        },
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "ad31328dacef12a162698272d000ea69af1ec8f3",
+          "title": "junit",
+          "authored_date": "2026-03-03T17:16:13.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 259,
+          "deletions": 200,
+          "total": 459,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/ad31328dacef12a162698272d000ea69af1ec8f3"
+        },
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "b72b60e1761096b7c1e62f5fee6e4f2bc644a54b",
+          "title": "#43983 - 合并报表：生成报告出现生成失败提示",
+          "authored_date": "2026-03-03T17:58:22.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 16,
+          "deletions": 13,
+          "total": 29,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/b72b60e1761096b7c1e62f5fee6e4f2bc644a54b"
+        },
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "de98dd313d06972124f8379b1e4f8d547cf25778",
+          "title": "#43891 - 审计平台说明手册",
+          "authored_date": "2026-03-04T10:59:32.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 852,
+          "deletions": 0,
+          "total": 852,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/de98dd313d06972124f8379b1e4f8d547cf25778"
+        },
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "af647cb3d71a93014d9c989d03146a931f72c4cd",
+          "title": "#43891 - 审计平台说明手册",
+          "authored_date": "2026-03-04T11:02:26.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 0,
+          "deletions": 0,
+          "total": 0,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/af647cb3d71a93014d9c989d03146a931f72c4cd"
+        },
+        {
+          "project_id": 155,
+          "project_name": "sacp/faith-ui/faith-ipo-ui",
+          "sha": "09f8d5001f1bc839ff71f0ca6f02bc075f2383cd",
+          "title": "Merge remote-tracking branch 'refs/remotes/origin/develop'",
+          "authored_date": "2026-03-04T14:50:04.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 288,
+          "deletions": 103,
+          "total": 391,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith-ui/faith-ipo-ui/-/commit/09f8d5001f1bc839ff71f0ca6f02bc075f2383cd"
+        },
+        {
+          "project_id": 166,
+          "project_name": "sacp/faith-ui/faith-fin-ui",
+          "sha": "da609f34547e7050f52bd362ab3fca5434efed82",
+          "title": "Merge remote-tracking branch 'refs/remotes/origin/develop'",
+          "authored_date": "2026-03-04T15:04:27.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 2698,
+          "deletions": 1248,
+          "total": 3946,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith-ui/faith-fin-ui/-/commit/da609f34547e7050f52bd362ab3fca5434efed82"
+        },
+        {
+          "project_id": 167,
+          "project_name": "sacp/faith",
+          "sha": "42ef6f8273cfc2e5a4f635ab3a6f15ca33580ae0",
+          "title": "Merge remote-tracking branch 'refs/remotes/origin/develop'",
+          "authored_date": "2026-03-04T17:26:29.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 46480,
+          "deletions": 10673,
+          "total": 57153,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/faith/-/commit/42ef6f8273cfc2e5a4f635ab3a6f15ca33580ae0"
+        },
+        {
+          "project_id": 183,
+          "project_name": "sacp/deploy",
+          "sha": "c504af947f1f7b710cc0341e00ed2ccbf0fa44ed",
+          "title": "20260304上线",
+          "authored_date": "2026-03-04T18:04:30.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 0,
+          "deletions": 0,
+          "total": 0,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/deploy/-/commit/c504af947f1f7b710cc0341e00ed2ccbf0fa44ed"
+        },
+        {
+          "project_id": 183,
+          "project_name": "sacp/deploy",
+          "sha": "a9dd66e0de1924ab993df69d2aed68e83c09584d",
+          "title": "模板目录",
+          "authored_date": "2026-03-04T18:50:27.000+08:00",
+          "author_name": "yi.dongshan",
+          "author_email": "yi.dongshan@bdo.com.cn",
+          "additions": 0,
+          "deletions": 0,
+          "total": 0,
+          "web_url": "https://gitlab.bdo.com.cn/sacp/deploy/-/commit/a9dd66e0de1924ab993df69d2aed68e83c09584d"
+        }
+      ]
+    }
+  }
+}
