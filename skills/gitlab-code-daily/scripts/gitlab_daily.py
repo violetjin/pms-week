@@ -180,8 +180,17 @@ def estimate_churn(commits: List[Commit], loc_per_hour: int = 200, min_hours: fl
 def load_user_map(path: str) -> Dict[str, str]:
     """Return account->name map from users.txt supporting 'account|name' lines."""
     m: Dict[str, str] = {}
-    # tolerate legacy encodings (e.g., GBK) by decoding with replacement
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    # tolerate legacy encodings (commonly GBK/GB18030 in CN environments)
+    try:
+        f = open(path, "r", encoding="utf-8")
+        lines = f.readlines()
+        f.close()
+    except UnicodeDecodeError:
+        f = open(path, "r", encoding="gb18030")
+        lines = f.readlines()
+        f.close()
+
+    for line in lines:
         for line in f:
             s = line.strip()
             if not s or s.startswith("#"):
