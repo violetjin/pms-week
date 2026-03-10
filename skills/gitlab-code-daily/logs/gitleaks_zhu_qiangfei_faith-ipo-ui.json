@@ -1,0 +1,42 @@
+[
+ {
+  "Description": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms.",
+  "StartLine": 39,
+  "EndLine": 39,
+  "StartColumn": 696,
+  "EndColumn": 715,
+  "Match": "ABIAEMAUABQAFAAUABQA",
+  "Secret": "ABIAEMAUABQAFAAUABQA",
+  "File": "gitlab/sacp__faith-ui__faith-ipo-ui/resources/libs/bdosnap/js/bdosnap.js",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 2.4577174,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "RuleID": "aws-access-token",
+  "Fingerprint": "gitlab/sacp__faith-ui__faith-ipo-ui/resources/libs/bdosnap/js/bdosnap.js:aws-access-token:39"
+ },
+ {
+  "Description": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms.",
+  "StartLine": 39,
+  "EndLine": 39,
+  "StartColumn": 4142,
+  "EndColumn": 4161,
+  "Match": "ABIAEQATAAIABAACAAQA",
+  "Secret": "ABIAEQATAAIABAACAAQA",
+  "File": "gitlab/sacp__faith-ui__faith-ipo-ui/resources/libs/bdosnap/js/bdosnap.js",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 2.1192408,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "RuleID": "aws-access-token",
+  "Fingerprint": "gitlab/sacp__faith-ui__faith-ipo-ui/resources/libs/bdosnap/js/bdosnap.js:aws-access-token:39"
+ }
+]
