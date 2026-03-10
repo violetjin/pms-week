@@ -250,7 +250,6 @@ def main() -> int:
 
     # Default output path under skill logs
     if not args.out:
-        import os
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "logs"))
         os.makedirs(base_dir, exist_ok=True)
         suffix = "_".join(sorted(set(args.user))) if args.user else "all"
