@@ -1,0 +1,22 @@
+[
+ {
+  "Description": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data.",
+  "StartLine": 5,
+  "EndLine": 5,
+  "StartColumn": 28,
+  "EndColumn": 245,
+  "Match": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJodS56aWppYW4mMTMyNjkzJmFjMTg0NjVhIiwianRpIjoiZmRhZjczYjMtYzgyZi00YjhkLThkNjItOTVlZmIxYmFiNWJjIiwiaWF0IjoxNzcyNDE1NjY3LCJleHAiOjE3NzI0NTg4Njd9.OJMr05uV3j-yKz_PF4YBF52zjZ0dhngT6WJjxyVFccc'",
+  "Secret": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJodS56aWppYW4mMTMyNjkzJmFjMTg0NjVhIiwianRpIjoiZmRhZjczYjMtYzgyZi00YjhkLThkNjItOTVlZmIxYmFiNWJjIiwiaWF0IjoxNzcyNDE1NjY3LCJleHAiOjE3NzI0NTg4Njd9.OJMr05uV3j-yKz_PF4YBF52zjZ0dhngT6WJjxyVFccc",
+  "File": "gitlab/bdo-sz__bdo-pm-confirmation-utils__cfm-file-download-client/HELP.md",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 5.379693,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "RuleID": "jwt",
+  "Fingerprint": "gitlab/bdo-sz__bdo-pm-confirmation-utils__cfm-file-download-client/HELP.md:jwt:5"
+ }
+]
