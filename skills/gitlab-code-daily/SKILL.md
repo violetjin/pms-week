@@ -65,13 +65,21 @@ Never print tokens in logs or reports.
    - Efficiency: churn per hour, commits per hour (heuristic), cycle-time proxy (if MR data enabled)
    - Quality: risk findings counts by severity; tests-touched ratio (if repo clone); revert/hotfix ratio
 
-6. **Generate report**
+6. **Generate report (default artifacts)**
+
+   When the user requests "get <person> commits in <date range> and analyze", always generate these artifacts under `skills/gitlab-code-daily/logs/`:
+
+   - `XXX_daily.md`: personal daily-style analysis report (efficiency + quality summary)
+   - `XXX_remediation.md`: remediation checklist (file/line + evidence + commit sha)
+
+   Also keep the raw JSON used for analysis.
+
+   Report content:
    - Per developer:
      - Summary bullets (what/where)
      - Time estimate + confidence (low/med/high)
      - Risk findings (severity + evidence pointers)
-   - Team summary:
-     - Total activity, biggest risky changes, blockers
+     - Remediation items with file/line and commit sha (use `git blame`)
 
 ## Output templates
 
@@ -97,8 +105,10 @@ Never print tokens in logs or reports.
 
 ## Bundled resources
 
-- `scripts/gitlab_daily.py`: fetch activity + produce JSON/Markdown
-- `scripts/risk_scan.py`: scan patches/text for secrets + heuristics
+- `scripts/gitlab_daily.py`: fetch activity + produce JSON
+- `scripts/user_map.py`: resolve Chinese name ↔ account from `users.txt`
+- `scripts/risk_scan.py`: scan patches/text for secrets + heuristics (optional)
 - `references/gitlab_api.md`: API endpoints and query patterns
+- `references/users.txt`: allowlist (supports `account|name`)
 
 Read these files when implementing or debugging.
