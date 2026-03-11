@@ -12,7 +12,7 @@ It supports:
 Usage (example):
   python3 gitlab_daily.py \
     --base-url https://gitlab.example.com \
-    --token $GITLAB_TOKEN \
+    --token ${GITLAB_TOKEN} \
     --group sacp --group lxits \
     --users-file users.txt \
     --from 2026-03-01 --to 2026-03-09 --tz Asia/Shanghai \
@@ -171,10 +171,24 @@ def estimate_sessions(commits: List[Commit], gap_minutes: int = 90, pad_minutes:
 
 
 def estimate_churn(commits: List[Commit], loc_per_hour: int = 200, min_hours: float = 0.25, max_hours: float = 10.0) -> float:
-    churn = sum(c.total for c in commits)
-    h = churn / float(loc_per_hour) if loc_per_hour > 0 else 0.0
-    h = max(min_hours if churn > 0 else 0.0, min(max_hours, h))
-    return h
+    """Estimate effort by summing per-commit churn estimates.
+
+    Rationale:
+    - If you cap by total churn once, a single huge import can dominate and hit the cap,
+      but many small commits would be under-estimated.
+    - The user's requested interpretation is: each commit represents a unit of work
+      that has its own minimum overhead (context switch, build/test), so we apply
+      min/max per commit then sum.
+    """
+    total_h = 0.0
+    for c in commits:
+        churn = float(c.total or 0)
+        if churn <= 0:
+            continue
+        h = churn / float(loc_per_hour) if loc_per_hour > 0 else 0.0
+        h = max(min_hours, min(max_hours, h))
+        total_h += h
+    return total_h
 
 
 def load_user_map(path: str) -> Dict[str, str]:
