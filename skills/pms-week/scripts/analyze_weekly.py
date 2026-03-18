@@ -287,8 +287,8 @@ def generate_markdown_report(
         lines.append("- （无日报记录）")
     if daily_by_ticket:
         lines.append("- 按任务统计：")
-        # 按工时降序排列，取前5个
-        sorted_tickets = sorted(daily_by_ticket.items(), key=lambda x: x[1], reverse=True)[:5]
+        # 按工时降序排列，显示全部任务，避免与日报总工时不一致
+        sorted_tickets = sorted(daily_by_ticket.items(), key=lambda x: x[1], reverse=True)
         for tid, hrs in sorted_tickets:
             title = ticket_titles.get(tid, "")
             lines.append(f"  - #{tid} {title}：{hrs:.2f} 小时")
