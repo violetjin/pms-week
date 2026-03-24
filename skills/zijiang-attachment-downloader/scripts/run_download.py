@@ -5,19 +5,20 @@ import json
 import os
 import re
 import subprocess
-import sys
 import time
 from collections import defaultdict
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DOWNLOAD_DIR = ROOT / 'file'
-DEFAULT_OUTPUT_XLSX = ROOT / 'references' / 'downloaded_output.xlsx'
 SITE_URL = 'https://tcziryzf7x.jiandaoyun.com/dash/699fae71c3a3b520445a159f'
 SITE_PASSWORD = '20260226@Zj'
 DEBUG_LOG = ROOT / 'references' / 'debug-log.md'
@@ -73,6 +74,7 @@ def log_debug(message: str) -> None:
         f.write(f'\n- {message}')
 
 
+
 def run(cmd: list[str], check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(cmd, text=True, capture_output=capture)
     if check and result.returncode != 0:
@@ -82,6 +84,7 @@ def run(cmd: list[str], check: bool = True, capture: bool = True) -> subprocess.
             f'STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}'
         )
     return result
+
 
 
 def normalize_date(v: Any) -> str:
@@ -94,6 +97,7 @@ def normalize_date(v: Any) -> str:
         return str(v).strip()
 
 
+
 def normalize_amount(v: Any) -> str:
     if pd.isna(v) or v == '':
         return ''
@@ -104,10 +108,12 @@ def normalize_amount(v: Any) -> str:
         return s
 
 
+
 def normalize_text(v: Any) -> str:
     if v is None or pd.isna(v):
         return ''
     return re.sub(r'\s+', ' ', str(v).strip())
+
 
 
 def normalize_voucher_no(v: Any) -> str:
@@ -119,15 +125,18 @@ def normalize_voucher_no(v: Any) -> str:
     return s
 
 
+
 def safe_name(s: Any) -> str:
     s = normalize_text(s)
     s = re.sub(r'[\\/:*?"<>|]+', '_', s)
     s = re.sub(r'\s+', ' ', s)
-    return s[:160] or 'unnamed'
+    return s[:180] or 'unnamed'
+
 
 
 def extract_company_from_filename(path: Path) -> str:
     return path.stem.split('_', 1)[0].strip()
+
 
 
 def ensure_output_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -135,6 +144,7 @@ def ensure_output_columns(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = ''
     return df
+
 
 
 def parse_excel(path: Path):
@@ -163,9 +173,11 @@ def parse_excel(path: Path):
     return df, rows, company
 
 
+
 def agent_browser(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     cmd = ['npx', '-y', 'agent-browser', *args]
     return run(cmd, check=check, capture=True)
+
 
 
 def ab_eval(js: str) -> str:
@@ -173,6 +185,7 @@ def ab_eval(js: str) -> str:
     if proc.returncode != 0:
         raise RuntimeError(f'eval failed\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}')
     return proc.stdout.strip()
+
 
 
 def parse_eval_output(raw: str) -> Any:
@@ -193,8 +206,10 @@ def parse_eval_output(raw: str) -> Any:
     return value
 
 
+
 def ab_eval_json(js: str) -> Any:
     return parse_eval_output(ab_eval(js))
+
 
 
 def login_if_needed() -> str:
@@ -222,6 +237,7 @@ def login_if_needed() -> str:
     return agent_browser('get', 'title').stdout.strip()
 
 
+
 def close_dialog_if_any() -> None:
     try:
         ab_eval(
@@ -240,27 +256,97 @@ def close_dialog_if_any() -> None:
         pass
 
 
+
+def set_page_number(page: int) -> None:
+    for _attempt in range(3):
+        js = f'''
+(() => {{
+  const input = document.querySelector('.x-pagination .page-input input.input-inner');
+  if (!input) return 'NO_PAGE_INPUT';
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  input.focus();
+  setter.call(input, {json.dumps(str(page))});
+  input.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: {json.dumps(str(page))}, inputType: 'insertText' }}));
+  input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  input.dispatchEvent(new KeyboardEvent('keydown', {{ bubbles: true, key: 'Enter', code: 'Enter' }}));
+  input.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true, key: 'Enter', code: 'Enter' }}));
+  input.blur();
+  return input.value;
+}})()
+'''
+        result = ab_eval(js)
+        log_debug(f'set_page_number page={page} result={result}')
+        if result != 'NO_PAGE_INPUT':
+            for _ in range(40):
+                time.sleep(0.3)
+                state = extract_current_page_state()
+                if state['currentPage'] == page:
+                    return
+        time.sleep(0.5)
+    raise RuntimeError(f'failed to jump to page {page}')
+
+
+
+def wait_for_month_filter(target_month: str, timeout_seconds: float = 20.0) -> None:
+    target_year, target_mon = target_month.split('-')
+    deadline = time.time() + timeout_seconds
+    last_inputs = None
+    last_row_count = None
+    while time.time() < deadline:
+        inputs = ab_eval_json(
+            """
+(() => Array.from(document.querySelectorAll('input.input-inner')).filter(el => el.offsetParent).slice(0, 2).map(x => x.value))()
+"""
+        )
+        state = extract_current_page_state()
+        rows = state['rows']
+        months_ok = bool(rows)
+        for row in rows:
+            if row['年'] and row['月']:
+                if not (row['年'] == target_year and row['月'] == target_mon):
+                    months_ok = False
+                    break
+        if inputs == [target_month, target_month] and months_ok:
+            log_debug(f'wait_for_month_filter stabilized month={target_month} rows={len(rows)} page={state["currentPage"]}/{state["totalPages"]}')
+            return
+        last_inputs = inputs
+        last_row_count = len(rows)
+        time.sleep(0.5)
+    raise RuntimeError(
+        f'month filter did not stabilize for {target_month}; last_inputs={last_inputs} last_row_count={last_row_count}'
+    )
+
+
+
 def set_month_range(start_month: str | None, end_month: str | None) -> None:
     if not start_month or not end_month:
         return
     js = f'''
 (() => {{
-  const values = [{json.dumps(start_month)}, {json.dumps(end_month)}];
   const inputs = Array.from(document.querySelectorAll('input.input-inner')).filter(el => el.offsetParent).slice(0, 2);
   if (inputs.length < 2) return 'NO_DATE_INPUTS';
-  inputs.forEach((input, idx) => {{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  function setVal(input, value) {{
     input.focus();
-    input.value = values[idx];
-    input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    setter.call(input, value);
+    input.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: value, inputType: 'insertText' }}));
     input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    input.dispatchEvent(new KeyboardEvent('keydown', {{ bubbles: true, key: 'Enter', code: 'Enter' }}));
+    input.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true, key: 'Enter', code: 'Enter' }}));
     input.blur();
-  }});
-  return JSON.stringify(inputs.map(el => el.value));
+  }}
+  // 用户要求：先结束日期，再开始日期
+  setVal(inputs[1], {json.dumps(end_month)});
+  setVal(inputs[0], {json.dumps(start_month)});
+  return JSON.stringify(inputs.map(x => x.value));
 }})()
 '''
     result = ab_eval(js)
     log_debug(f'set_month_range {start_month}..{end_month} => {result}')
     time.sleep(1.5)
+    wait_for_month_filter(start_month)
+    set_page_number(1)
+
 
 
 def extract_current_page_state() -> dict[str, Any]:
@@ -276,7 +362,8 @@ def extract_current_page_state() -> dict[str, Any]:
             if title:
                 colmap[title] = col.get('value')
         year = normalize_voucher_no(colmap.get('年'))
-        month = normalize_voucher_no(colmap.get('月')).zfill(2) if normalize_voucher_no(colmap.get('月')) else ''
+        month_raw = normalize_voucher_no(colmap.get('月'))
+        month = month_raw.zfill(2) if month_raw else ''
         rows.append({
             '公司名称': normalize_text(colmap.get('公司名称')),
             '年': year,
@@ -299,6 +386,7 @@ def extract_current_page_state() -> dict[str, Any]:
     }
 
 
+
 def click_next_page(prev_page: int) -> bool:
     result = ab_eval(
         """
@@ -312,12 +400,13 @@ def click_next_page(prev_page: int) -> bool:
     )
     if 'NO_NEXT' in str(result):
         return False
-    for _ in range(30):
-        time.sleep(0.5)
+    for _ in range(40):
+        time.sleep(0.4)
         state = extract_current_page_state()
         if state['currentPage'] != prev_page:
             return True
     raise RuntimeError(f'page did not advance from {prev_page}')
+
 
 
 def crawl_site_rows(max_pages: int | None = None) -> list[dict[str, Any]]:
@@ -338,7 +427,20 @@ def crawl_site_rows(max_pages: int | None = None) -> list[dict[str, Any]]:
             break
         if not click_next_page(page):
             break
+    return all_rows
+
+
+
+def crawl_site_rows_for_months(months: list[str], max_pages_per_month: int | None = None) -> list[dict[str, Any]]:
+    all_rows: list[dict[str, Any]] = []
+    for month in months:
+        close_dialog_if_any()
+        set_month_range(month, month)
+        month_rows = crawl_site_rows(max_pages=max_pages_per_month)
+        log_debug(f'crawl_site_rows_for_months month={month} rows={len(month_rows)}')
+        all_rows.extend(month_rows)
     return dedupe_site_rows(all_rows)
+
 
 
 def dedupe_site_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -359,6 +461,7 @@ def dedupe_site_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(deduped.values())
 
 
+
 def amounts_equal(a: str, b: str) -> bool:
     if not a or not b:
         return False
@@ -368,12 +471,14 @@ def amounts_equal(a: str, b: str) -> bool:
         return a == b
 
 
+
 def summary_matches(excel_summary: str, site_summary: str) -> bool:
     a = normalize_text(excel_summary)
     b = normalize_text(site_summary)
     if not a or not b:
         return False
     return a == b or a in b or b in a
+
 
 
 def build_indexes(site_rows: list[dict[str, Any]]):
@@ -391,6 +496,7 @@ def build_indexes(site_rows: list[dict[str, Any]]):
         if attachment_no:
             by_attachment_no[attachment_no].append(row)
     return by_month_voucher, by_attachment_no
+
 
 
 def choose_best_candidate(excel_row: dict[str, Any], candidates: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -424,6 +530,7 @@ def choose_best_candidate(excel_row: dict[str, Any], candidates: list[dict[str, 
     return best, meta
 
 
+
 def match_site_row(excel_row: dict[str, Any], by_month_voucher, by_attachment_no) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     if not excel_row.get('凭证日期') or not excel_row.get('凭证编号'):
         return None, {'reason': 'missing-date-or-voucher'}
@@ -452,6 +559,7 @@ def match_site_row(excel_row: dict[str, Any], by_month_voucher, by_attachment_no
     return best, meta
 
 
+
 def filename_from_url(url: str, fallback: str | None = None) -> str:
     parsed = urlparse(url)
     qs = parse_qs(parsed.query)
@@ -460,6 +568,7 @@ def filename_from_url(url: str, fallback: str | None = None) -> str:
     if fallback:
         return safe_name(fallback)
     return safe_name(Path(parsed.path).name or f'download-{int(time.time())}.bin')
+
 
 
 def download_file(url: str, out_dir: Path, filename_hint: str | None = None) -> tuple[str, str]:
@@ -471,10 +580,7 @@ def download_file(url: str, out_dir: Path, filename_hint: str | None = None) -> 
     stem = dest.stem
     suffix = dest.suffix
     n = 2
-    while dest.exists() and dest.stat().st_size == 0:
-        dest.unlink()
-    while dest.exists() and dest.stat().st_size > 0:
-        return dest.name, str(dest)
+
     while dest.exists():
         dest = out_dir / f'{stem}_{n}{suffix}'
         n += 1
@@ -505,8 +611,27 @@ def download_file(url: str, out_dir: Path, filename_hint: str | None = None) -> 
     return dest.name, str(dest)
 
 
-def download_accounting_vouchers(excel_row: dict[str, Any], site_row: dict[str, Any], download_root: Path, cache: dict[str, dict[str, str]]):
-    subdir = download_root / safe_name(excel_row['公司名称']) / safe_name(f"{excel_row['凭证日期']}_{excel_row['凭证编号']}")
+
+def prepare_run_dir(download_root: Path, company: str) -> Path:
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_dir = download_root / safe_name(company) / timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+
+def build_output_paths(excel_path: Path, run_dir: Path, output_excel_arg: str | None):
+    default_name = f'{safe_name(excel_path.stem)}_result.xlsx'
+    output_excel = Path(output_excel_arg).resolve() if output_excel_arg else (run_dir / default_name)
+    output_excel.parent.mkdir(parents=True, exist_ok=True)
+    stem_no_suffix = output_excel.stem
+    csv_path = output_excel.with_name(f'{stem_no_suffix}.csv')
+    json_path = output_excel.with_name(f'{stem_no_suffix}.json')
+    return output_excel, csv_path, json_path
+
+
+
+def download_accounting_vouchers(site_row: dict[str, Any], run_dir: Path, cache: dict[str, dict[str, str]]):
     downloaded = []
     for item in site_row.get('会计凭证', []):
         if not isinstance(item, dict):
@@ -518,13 +643,14 @@ def download_accounting_vouchers(excel_row: dict[str, Any], site_row: dict[str, 
         if url in cache and Path(cache[url]['path']).exists():
             downloaded.append({'name': cache[url]['name'], 'path': cache[url]['path'], 'url': url, 'cached': True})
             continue
-        name, path = download_file(url, subdir, name_hint)
+        name, path = download_file(url, run_dir, name_hint)
         cache[url] = {'name': name, 'path': path}
         downloaded.append({'name': name, 'path': path, 'url': url, 'cached': False})
-    return downloaded, str(subdir)
+    return downloaded, str(run_dir)
 
 
-def process_row(excel_row: dict[str, Any], by_month_voucher, by_attachment_no, download_root: Path, cache: dict[str, dict[str, str]]):
+
+def process_row(excel_row: dict[str, Any], by_month_voucher, by_attachment_no, run_dir: Path, cache: dict[str, dict[str, str]]):
     site_row, match_meta = match_site_row(excel_row, by_month_voucher, by_attachment_no)
     if not site_row:
         return {
@@ -550,7 +676,7 @@ def process_row(excel_row: dict[str, Any], by_month_voucher, by_attachment_no, d
             },
         }
 
-    downloaded, download_dir = download_accounting_vouchers(excel_row, site_row, download_root, cache)
+    downloaded, download_dir = download_accounting_vouchers(site_row, run_dir, cache)
     return {
         'matched': True,
         'downloaded': downloaded,
@@ -569,11 +695,49 @@ def process_row(excel_row: dict[str, Any], by_month_voucher, by_attachment_no, d
     }
 
 
-def month_range_from_rows(rows: list[dict[str, Any]]) -> tuple[str | None, str | None]:
-    months = sorted({row['凭证日期'][:7] for row in rows if row.get('凭证日期') and len(row['凭证日期']) >= 7})
-    if not months:
-        return None, None
-    return months[0], months[-1]
+
+def month_list_from_rows(rows: list[dict[str, Any]]) -> list[str]:
+    return sorted({row['凭证日期'][:7] for row in rows if row.get('凭证日期') and len(row['凭证日期']) >= 7})
+
+
+
+def apply_excel_hyperlinks(output_excel: Path, hyperlink_map: dict[int, dict[str, Any]]) -> None:
+    wb = load_workbook(output_excel)
+    ws = wb.active
+    header_map = {cell.value: idx for idx, cell in enumerate(ws[1], start=1)}
+    name_col = header_map.get('下载附件名称')
+    dir_col = header_map.get('下载目录')
+    if not name_col:
+        wb.save(output_excel)
+        return
+
+    for df_index, item in hyperlink_map.items():
+        excel_row = df_index + 2
+        cell = ws.cell(row=excel_row, column=name_col)
+        names = item.get('names', [])
+        paths = item.get('paths', [])
+        dir_path = item.get('dir_path', '')
+        if not names:
+            continue
+        cell.value = '\n'.join(names)
+        target = ''
+        if len(paths) == 1:
+            target = os.path.relpath(paths[0], output_excel.parent)
+        elif len(paths) > 1 and dir_path:
+            target = os.path.relpath(dir_path, output_excel.parent)
+        if target:
+            cell.hyperlink = target
+            cell.style = 'Hyperlink'
+        cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+        if dir_col and dir_path:
+            dir_cell = ws.cell(row=excel_row, column=dir_col)
+            dir_cell.value = os.path.relpath(dir_path, output_excel.parent)
+            dir_cell.hyperlink = dir_cell.value
+            dir_cell.style = 'Hyperlink'
+
+    wb.save(output_excel)
+
 
 
 def main() -> None:
@@ -581,36 +745,45 @@ def main() -> None:
     ap.add_argument('excel', help='xlsx path')
     ap.add_argument('--limit', type=int, default=0, help='0 means all rows')
     ap.add_argument('--download-dir', default=str(DEFAULT_DOWNLOAD_DIR))
-    ap.add_argument('--output-excel', default=str(DEFAULT_OUTPUT_XLSX))
-    ap.add_argument('--max-pages', type=int, default=0, help='0 means crawl all pages')
+    ap.add_argument('--output-excel', default='', help='optional explicit xlsx output path')
+    ap.add_argument('--max-pages', type=int, default=0, help='0 means crawl all pages for each month')
     args = ap.parse_args()
 
     excel_path = Path(args.excel).resolve()
     download_dir = Path(args.download_dir).resolve()
-    output_excel = Path(args.output_excel).resolve()
 
     df, rows, company = parse_excel(excel_path)
     rows_to_process = rows[: args.limit] if args.limit and args.limit > 0 else rows
+    run_dir = prepare_run_dir(download_dir, company)
+    output_excel, csv_path, json_path = build_output_paths(excel_path, run_dir, args.output_excel or None)
 
     title = login_if_needed()
-    start_month, end_month = month_range_from_rows(rows_to_process)
-    set_month_range(start_month, end_month)
-    site_rows = crawl_site_rows(max_pages=args.max_pages or None)
+    months = month_list_from_rows(rows_to_process)
+    site_rows = crawl_site_rows_for_months(months, max_pages_per_month=args.max_pages or None)
     by_month_voucher, by_attachment_no = build_indexes(site_rows)
-    log_debug(f'site_rows_deduped={len(site_rows)} keys_month_voucher={len(by_month_voucher)} keys_attachment_no={len(by_attachment_no)}')
+    log_debug(f'site_rows_deduped={len(site_rows)} keys_month_voucher={len(by_month_voucher)} keys_attachment_no={len(by_attachment_no)} months={months}')
 
     results = []
+    hyperlink_map: dict[int, dict[str, Any]] = {}
     download_cache: dict[str, dict[str, str]] = {}
 
     for row in rows_to_process:
         try:
-            result = process_row(row, by_month_voucher, by_attachment_no, download_dir, download_cache)
-            names = [x['name'] for x in result['downloaded'] if x.get('name')]
-            df.at[row['index'], '下载附件名称'] = ';'.join(names)
+            result = process_row(row, by_month_voucher, by_attachment_no, run_dir, download_cache)
+            downloaded = result['downloaded']
+            names = [x['name'] for x in downloaded if x.get('name')]
+            paths = [x['path'] for x in downloaded if x.get('path')]
+            df.at[row['index'], '下载附件名称'] = '\n'.join(names)
             df.at[row['index'], '下载状态'] = 'success' if names else ('matched-no-download' if result['matched'] else 'not-found')
             df.at[row['index'], '下载文件数'] = len(names)
             df.at[row['index'], '下载目录'] = result.get('download_dir', '')
             df.at[row['index'], '失败原因'] = '' if names else result['match_meta'].get('reason', '')
+            if names:
+                hyperlink_map[row['index']] = {
+                    'names': names,
+                    'paths': paths,
+                    'dir_path': result.get('download_dir', ''),
+                }
             results.append({**row, **result, 'status': 'ok' if names else 'no-download'})
         except Exception as e:
             df.at[row['index'], '下载状态'] = 'error'
@@ -619,10 +792,9 @@ def main() -> None:
         finally:
             close_dialog_if_any()
 
-    output_excel.parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(output_excel, index=False)
-    csv_path = output_excel.with_suffix('.csv')
-    json_path = output_excel.with_suffix('.json')
+    apply_excel_hyperlinks(output_excel, hyperlink_map)
+
     with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.DictWriter(f, fieldnames=sorted({k for r in results for k in r.keys()}))
         writer.writeheader()
@@ -631,6 +803,7 @@ def main() -> None:
         json.dump({
             'title': title,
             'company': company,
+            'run_dir': str(run_dir),
             'crawled_site_rows': len(site_rows),
             'processed': len(results),
             'results': results,
@@ -640,13 +813,14 @@ def main() -> None:
     print(json.dumps({
         'title': title,
         'company': company,
+        'run_dir': str(run_dir),
         'crawled_site_rows': len(site_rows),
         'processed': len(results),
         'success_count': success_count,
         'output_excel': str(output_excel),
         'csv': str(csv_path),
         'json': str(json_path),
-        'download_dir': str(download_dir),
+        'download_dir': str(run_dir),
     }, ensure_ascii=False, indent=2))
 
 
