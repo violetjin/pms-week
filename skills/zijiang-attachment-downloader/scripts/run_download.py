@@ -326,8 +326,11 @@ def set_month_range(start_month: str | None, end_month: str | None) -> None:
   const inputs = Array.from(document.querySelectorAll('input.input-inner')).filter(el => el.offsetParent).slice(0, 2);
   if (inputs.length < 2) return 'NO_DATE_INPUTS';
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  function setVal(input, value) {{
+  function apply(input, value) {{
     input.focus();
+    setter.call(input, '');
+    input.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: null, inputType: 'deleteContentBackward' }}));
+    input.dispatchEvent(new Event('change', {{ bubbles: true }}));
     setter.call(input, value);
     input.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: value, inputType: 'insertText' }}));
     input.dispatchEvent(new Event('change', {{ bubbles: true }}));
@@ -336,16 +339,26 @@ def set_month_range(start_month: str | None, end_month: str | None) -> None:
     input.blur();
   }}
   // 用户要求：先结束日期，再开始日期
-  setVal(inputs[1], {json.dumps(end_month)});
-  setVal(inputs[0], {json.dumps(start_month)});
+  apply(inputs[1], {json.dumps(end_month)});
+  apply(inputs[0], {json.dumps(start_month)});
   return JSON.stringify(inputs.map(x => x.value));
 }})()
 '''
-    result = ab_eval(js)
-    log_debug(f'set_month_range {start_month}..{end_month} => {result}')
-    time.sleep(1.5)
-    wait_for_month_filter(start_month)
-    set_page_number(1)
+    last_error = None
+    for attempt in range(1, 4):
+        result = ab_eval(js)
+        log_debug(f'set_month_range attempt={attempt} {start_month}..{end_month} => {result}')
+        time.sleep(1.5)
+        try:
+            wait_for_month_filter(start_month, timeout_seconds=8.0)
+            set_page_number(1)
+            return
+        except Exception as e:
+            last_error = e
+            log_debug(f'set_month_range retry attempt={attempt} failed error={e}')
+            close_dialog_if_any()
+            time.sleep(1.0)
+    raise RuntimeError(f'failed to set month range {start_month}..{end_month}: {last_error}')
 
 
 
@@ -696,6 +709,114 @@ def process_row(excel_row: dict[str, Any], by_month_voucher, by_attachment_no, r
 
 
 
+def summarize_downloaded(downloaded: list[dict[str, Any]] | None) -> tuple[list[str], list[str]]:
+    names: list[str] = []
+    paths: list[str] = []
+    for item in downloaded or []:
+        if not isinstance(item, dict):
+            continue
+        name = normalize_text(item.get('name'))
+        path = str(item.get('path') or '').strip()
+        if not name or not path:
+            continue
+        if not Path(path).exists():
+            continue
+        names.append(name)
+        paths.append(path)
+    return names, paths
+
+
+
+def update_row_output(df: pd.DataFrame, row_index: int, result: dict[str, Any]) -> tuple[list[str], list[str]]:
+    names, paths = summarize_downloaded(result.get('downloaded'))
+    df.at[row_index, '下载附件名称'] = '\n'.join(names)
+    df.at[row_index, '下载状态'] = 'success' if names else ('matched-no-download' if result.get('matched') else 'not-found')
+    df.at[row_index, '下载文件数'] = len(names)
+    df.at[row_index, '下载目录'] = result.get('download_dir', '')
+    df.at[row_index, '失败原因'] = '' if names else result.get('match_meta', {}).get('reason', '')
+    return names, paths
+
+
+
+def build_result_record(row: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    names, _paths = summarize_downloaded(result.get('downloaded'))
+    status = 'ok' if names else 'no-download'
+    return {**row, **result, 'status': status}
+
+
+
+def find_retry_rows(rows_to_process: list[dict[str, Any]], df: pd.DataFrame, results_by_index: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+    retry_rows: list[dict[str, Any]] = []
+    for row in rows_to_process:
+        idx = row['index']
+        result = results_by_index.get(idx) or {}
+        names, paths = summarize_downloaded(result.get('downloaded'))
+        cell_value = normalize_text(df.at[idx, '下载附件名称']) if '下载附件名称' in df.columns else ''
+        status = normalize_text(df.at[idx, '下载状态']) if '下载状态' in df.columns else ''
+        if status == 'success' and cell_value and names and all(Path(p).exists() for p in paths):
+            continue
+        retry_rows.append(row)
+    return retry_rows
+
+
+
+def retry_failed_rows(
+    rows_to_process: list[dict[str, Any]],
+    df: pd.DataFrame,
+    results_by_index: dict[int, dict[str, Any]],
+    hyperlink_map: dict[int, dict[str, Any]],
+    run_dir: Path,
+    download_cache: dict[str, dict[str, str]],
+    max_pages_per_month: int | None = None,
+    retry_rounds: int = 1,
+) -> list[dict[str, Any]]:
+    rounds: list[dict[str, Any]] = []
+    for attempt in range(1, retry_rounds + 1):
+        retry_rows = find_retry_rows(rows_to_process, df, results_by_index)
+        if not retry_rows:
+            break
+        retry_months = month_list_from_rows(retry_rows)
+        log_debug(f'retry_failed_rows attempt={attempt} rows={len(retry_rows)} months={retry_months}')
+        site_rows = crawl_site_rows_for_months(retry_months, max_pages_per_month=max_pages_per_month)
+        by_month_voucher, by_attachment_no = build_indexes(site_rows)
+        recovered = 0
+        for row in retry_rows:
+            try:
+                result = process_row(row, by_month_voucher, by_attachment_no, run_dir, download_cache)
+                names, paths = update_row_output(df, row['index'], result)
+                results_by_index[row['index']] = build_result_record(row, result)
+                if names:
+                    hyperlink_map[row['index']] = {
+                        'names': names,
+                        'paths': paths,
+                        'dir_path': result.get('download_dir', ''),
+                    }
+                    recovered += 1
+                else:
+                    hyperlink_map.pop(row['index'], None)
+            except Exception as e:
+                df.at[row['index'], '下载附件名称'] = ''
+                df.at[row['index'], '下载状态'] = 'error'
+                df.at[row['index'], '失败原因'] = str(e)
+                hyperlink_map.pop(row['index'], None)
+                results_by_index[row['index']] = {**row, 'status': 'error', 'error': str(e), 'downloaded': []}
+            finally:
+                close_dialog_if_any()
+        round_info = {
+            'attempt': attempt,
+            'retry_rows': len(retry_rows),
+            'recovered': recovered,
+            'months': retry_months,
+            'site_rows': len(site_rows),
+        }
+        rounds.append(round_info)
+        log_debug(f'retry_failed_rows_summary {round_info}')
+        if recovered == 0:
+            break
+    return rounds
+
+
+
 def month_list_from_rows(rows: list[dict[str, Any]]) -> list[str]:
     return sorted({row['凭证日期'][:7] for row in rows if row.get('凭证日期') and len(row['凭证日期']) >= 7})
 
@@ -763,60 +884,71 @@ def main() -> None:
     by_month_voucher, by_attachment_no = build_indexes(site_rows)
     log_debug(f'site_rows_deduped={len(site_rows)} keys_month_voucher={len(by_month_voucher)} keys_attachment_no={len(by_attachment_no)} months={months}')
 
-    results = []
+    results_by_index: dict[int, dict[str, Any]] = {}
     hyperlink_map: dict[int, dict[str, Any]] = {}
     download_cache: dict[str, dict[str, str]] = {}
 
     for row in rows_to_process:
         try:
             result = process_row(row, by_month_voucher, by_attachment_no, run_dir, download_cache)
-            downloaded = result['downloaded']
-            names = [x['name'] for x in downloaded if x.get('name')]
-            paths = [x['path'] for x in downloaded if x.get('path')]
-            df.at[row['index'], '下载附件名称'] = '\n'.join(names)
-            df.at[row['index'], '下载状态'] = 'success' if names else ('matched-no-download' if result['matched'] else 'not-found')
-            df.at[row['index'], '下载文件数'] = len(names)
-            df.at[row['index'], '下载目录'] = result.get('download_dir', '')
-            df.at[row['index'], '失败原因'] = '' if names else result['match_meta'].get('reason', '')
+            names, paths = update_row_output(df, row['index'], result)
             if names:
                 hyperlink_map[row['index']] = {
                     'names': names,
                     'paths': paths,
                     'dir_path': result.get('download_dir', ''),
                 }
-            results.append({**row, **result, 'status': 'ok' if names else 'no-download'})
+            results_by_index[row['index']] = build_result_record(row, result)
         except Exception as e:
+            df.at[row['index'], '下载附件名称'] = ''
             df.at[row['index'], '下载状态'] = 'error'
+            df.at[row['index'], '下载文件数'] = 0
+            df.at[row['index'], '下载目录'] = ''
             df.at[row['index'], '失败原因'] = str(e)
-            results.append({**row, 'status': 'error', 'error': str(e)})
+            results_by_index[row['index']] = {**row, 'status': 'error', 'error': str(e), 'downloaded': []}
         finally:
             close_dialog_if_any()
+
+    retry_rounds = retry_failed_rows(
+        rows_to_process=rows_to_process,
+        df=df,
+        results_by_index=results_by_index,
+        hyperlink_map=hyperlink_map,
+        run_dir=run_dir,
+        download_cache=download_cache,
+        max_pages_per_month=args.max_pages or None,
+        retry_rounds=2,
+    )
+
+    ordered_results = [results_by_index[row['index']] for row in rows_to_process]
 
     df.to_excel(output_excel, index=False)
     apply_excel_hyperlinks(output_excel, hyperlink_map)
 
     with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-        writer = csv.DictWriter(f, fieldnames=sorted({k for r in results for k in r.keys()}))
+        writer = csv.DictWriter(f, fieldnames=sorted({k for r in ordered_results for k in r.keys()}))
         writer.writeheader()
-        writer.writerows(results)
+        writer.writerows(ordered_results)
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump({
             'title': title,
             'company': company,
             'run_dir': str(run_dir),
             'crawled_site_rows': len(site_rows),
-            'processed': len(results),
-            'results': results,
+            'processed': len(ordered_results),
+            'retry_rounds': retry_rounds,
+            'results': ordered_results,
         }, f, ensure_ascii=False, indent=2)
 
-    success_count = sum(1 for r in results if r.get('status') == 'ok')
+    success_count = sum(1 for r in ordered_results if r.get('status') == 'ok')
     print(json.dumps({
         'title': title,
         'company': company,
         'run_dir': str(run_dir),
         'crawled_site_rows': len(site_rows),
-        'processed': len(results),
+        'processed': len(ordered_results),
         'success_count': success_count,
+        'retry_rounds': retry_rounds,
         'output_excel': str(output_excel),
         'csv': str(csv_path),
         'json': str(json_path),
