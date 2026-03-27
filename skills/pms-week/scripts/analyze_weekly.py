@@ -166,6 +166,132 @@ def calculate_consistency(commits: List[Dict[str, Any]], tasks: List[Dict[str, A
         return "low", f"{ratio*100:.0f}% 提交包含任务ID，建议在提交信息中关联任务ID"
 
 
+def calculate_system_scores(
+    commits_count: int,
+    loc_total: int,
+    task_count: int,
+    daily_total_hours: float,
+    combined_h: float,
+    commits_with_taskid: int,
+    merge_commits: int,
+    commits_without_taskid_count: int,
+    risk_issue_count: int,
+    risk_error_count: int,
+) -> Dict[str, float]:
+    """Generate the section-6 score card used by weekly reports and summary parsing."""
+    actionable_commits = max(0, commits_count - merge_commits)
+
+    # 1) 交付活跃度（2.5）
+    if commits_count <= 0 and loc_total <= 0:
+        if task_count >= 5:
+            delivery_score = 1.8
+        elif task_count >= 4:
+            delivery_score = 1.5
+        elif task_count >= 1:
+            delivery_score = 1.2
+        else:
+            delivery_score = 0.0
+    else:
+        if commits_count >= 8 or loc_total >= 2000 or combined_h >= 35:
+            delivery_score = 2.5
+        elif commits_count >= 5 or loc_total >= 1000 or combined_h >= 15:
+            delivery_score = 2.2
+        elif commits_count >= 2 or loc_total >= 200 or combined_h >= 4:
+            delivery_score = 1.9
+        else:
+            delivery_score = 1.5
+        if delivery_score < 1.8 and task_count >= 5:
+            delivery_score = 1.8
+
+    # 2) 任务一致性（3.0）
+    if commits_count == 0:
+        consistency_score = 1.1 if task_count > 0 else 0.0
+    elif actionable_commits <= 0:
+        consistency_score = 3.0 if commits_with_taskid > 0 else 1.6
+    elif commits_with_taskid == 0:
+        consistency_score = 1.6 if commits_count >= 5 and task_count > 0 else 0.5
+    else:
+        task_ratio = commits_with_taskid / max(1, actionable_commits)
+        if commits_without_taskid_count == 0:
+            consistency_score = 3.0
+        elif task_ratio >= 0.75:
+            consistency_score = 2.7
+        elif task_ratio >= 0.40:
+            consistency_score = 1.6
+        else:
+            consistency_score = 1.2
+
+    # 3) 工时合理性（2.0）
+    if daily_total_hours <= 0:
+        hours_score = 0.8 if commits_count == 0 else 1.0
+    elif commits_count == 0 and combined_h <= 0:
+        hours_score = 0.8
+    else:
+        ratio = combined_h / max(daily_total_hours, 0.01)
+        if 0.8 <= ratio <= 1.2:
+            hours_score = 2.0
+        elif 0.6 <= ratio < 0.8 or 1.2 < ratio <= 1.5:
+            hours_score = 1.5
+        elif 0.4 <= ratio < 0.6 or 1.5 < ratio <= 2.0:
+            hours_score = 1.0
+        elif 0.2 <= ratio < 0.4 or 2.0 < ratio <= 3.0:
+            hours_score = 0.5
+        else:
+            hours_score = 0.2
+
+    # 4) 风险质量（2.5）
+    if commits_count == 0:
+        risk_score = 2.3
+    elif risk_issue_count <= 0:
+        risk_score = 2.5
+    elif risk_error_count > 0 or risk_issue_count > 10:
+        risk_score = 2.1
+    else:
+        risk_score = 2.3
+
+    total_score = round(delivery_score + consistency_score + hours_score + risk_score, 1)
+    return {
+        "delivery": round(delivery_score, 1),
+        "consistency": round(consistency_score, 1),
+        "hours": round(hours_score, 1),
+        "risk": round(risk_score, 1),
+        "total": total_score,
+    }
+
+
+def build_system_score_notes(scores: Dict[str, float]) -> List[str]:
+    """Build short explanations for the section-6 score card."""
+    notes: List[str] = []
+
+    delivery = scores["delivery"]
+    consistency = scores["consistency"]
+    hours = scores["hours"]
+    risk = scores["risk"]
+
+    if delivery >= 2.0:
+        notes.append("交付活跃度较好")
+    elif delivery <= 0.5:
+        notes.append("交付活跃度偏弱")
+
+    if consistency >= 2.7:
+        notes.append("任务关联较清晰")
+    elif consistency <= 1.1:
+        notes.append("任务关联度偏弱")
+
+    if hours >= 1.5:
+        notes.append("工时匹配度较好")
+    else:
+        notes.append("工时匹配度一般")
+
+    if len(notes) < 3:
+        if risk >= 2.1:
+            notes.append("本周改动风险可控")
+        else:
+            notes.append("需关注本周改动风险")
+
+    return notes[:3]
+
+
 def generate_markdown_report(
     username: str,
     realname: str,
@@ -589,6 +715,7 @@ def generate_markdown_report(
 
     # 4. 工时比例总结
     lines.append("#### 工时比例总结")
+    ratio_hours = None
     if daily_total_hours > 0:
         ratio_hours = combined_h / daily_total_hours
         if ratio_hours < 0.5:
@@ -600,6 +727,26 @@ def generate_markdown_report(
     else:
         lines.append("- 无日报记录，无法计算工时比例")
     lines.append("")
+
+    system_scores = calculate_system_scores(
+        commits_count=git_counts.get('commits', 0),
+        loc_total=git_counts.get('loc_total', 0),
+        task_count=zt_summary['total'],
+        daily_total_hours=daily_total_hours,
+        combined_h=combined_h,
+        commits_with_taskid=commits_with_taskid,
+        merge_commits=len(commits_merge),
+        commits_without_taskid_count=len(commits_without_taskid),
+        risk_issue_count=total_gitleaks + sum(
+            sum(r['error'] + r['warning'] for r in rules.values())
+            for rules in semgrep_by_project.values()
+        ) if commits else 0,
+        risk_error_count=sum(
+            sum(r['error'] for r in rules.values())
+            for rules in semgrep_by_project.values()
+        ) if commits else 0,
+    )
+    score_notes = build_system_score_notes(system_scores)
 
     lines.append("## 五、结论与建议")
     lines.append("")
@@ -615,6 +762,19 @@ def generate_markdown_report(
     lines.append("  - 保持提交粒度适中，避免过大或过小")
     lines.append("  - 提交信息中关联禅道任务ID（格式：#任务号）")
     lines.append("  - 高风险代码（path-traversal、DES弃用等）请优先整改")
+    lines.append("")
+
+    lines.append("## 六、系统性评分")
+    lines.append("")
+    lines.append(f"- **总分：{system_scores['total']:.1f} / 10**")
+    lines.append("- **评分明细：**")
+    lines.append(f"  - 交付活跃度：{system_scores['delivery']:.1f} / 2.5")
+    lines.append(f"  - 任务一致性：{system_scores['consistency']:.1f} / 3.0")
+    lines.append(f"  - 工时合理性：{system_scores['hours']:.1f} / 2.0")
+    lines.append(f"  - 风险质量：{system_scores['risk']:.1f} / 2.5")
+    lines.append("- **评分说明：**")
+    for note in score_notes:
+        lines.append(f"  - {note}")
     lines.append("")
 
     # Write
