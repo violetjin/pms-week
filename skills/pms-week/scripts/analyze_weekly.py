@@ -178,76 +178,83 @@ def calculate_system_scores(
     risk_issue_count: int,
     risk_error_count: int,
 ) -> Dict[str, float]:
-    """Generate the section-6 score card used by weekly reports and summary parsing."""
+    """Generate the section-6 score card used by weekly reports and summary parsing.
+
+    New weights (total 10):
+    - 交付活跃度：2.0
+    - 任务一致性：2.0
+    - 工时合理性：4.0
+    - 风险质量：2.0
+    """
     actionable_commits = max(0, commits_count - merge_commits)
 
-    # 1) 交付活跃度（2.5）
+    # 1) 交付活跃度（2.0）
     if commits_count <= 0 and loc_total <= 0:
         if task_count >= 5:
-            delivery_score = 1.8
-        elif task_count >= 4:
-            delivery_score = 1.5
+            delivery_score = 1.4
+        elif task_count >= 3:
+            delivery_score = 1.0
         elif task_count >= 1:
-            delivery_score = 1.2
+            delivery_score = 0.6
         else:
             delivery_score = 0.0
     else:
         if commits_count >= 8 or loc_total >= 2000 or combined_h >= 35:
-            delivery_score = 2.5
+            delivery_score = 2.0
         elif commits_count >= 5 or loc_total >= 1000 or combined_h >= 15:
-            delivery_score = 2.2
+            delivery_score = 1.7
         elif commits_count >= 2 or loc_total >= 200 or combined_h >= 4:
-            delivery_score = 1.9
+            delivery_score = 1.3
         else:
-            delivery_score = 1.5
-        if delivery_score < 1.8 and task_count >= 5:
-            delivery_score = 1.8
+            delivery_score = 0.8
+        if delivery_score < 1.4 and task_count >= 5:
+            delivery_score = 1.4
 
-    # 2) 任务一致性（3.0）
+    # 2) 任务一致性（2.0）
     if commits_count == 0:
-        consistency_score = 1.1 if task_count > 0 else 0.0
+        consistency_score = 0.8 if task_count > 0 else 0.0
     elif actionable_commits <= 0:
-        consistency_score = 3.0 if commits_with_taskid > 0 else 1.6
+        consistency_score = 2.0 if commits_with_taskid > 0 else 1.0
     elif commits_with_taskid == 0:
-        consistency_score = 1.6 if commits_count >= 5 and task_count > 0 else 0.5
+        consistency_score = 1.0 if commits_count >= 5 and task_count > 0 else 0.4
     else:
         task_ratio = commits_with_taskid / max(1, actionable_commits)
         if commits_without_taskid_count == 0:
-            consistency_score = 3.0
+            consistency_score = 2.0
         elif task_ratio >= 0.75:
-            consistency_score = 2.7
+            consistency_score = 1.7
         elif task_ratio >= 0.40:
-            consistency_score = 1.6
+            consistency_score = 1.1
         else:
-            consistency_score = 1.2
+            consistency_score = 0.7
 
-    # 3) 工时合理性（2.0）
+    # 3) 工时合理性（4.0）
     if daily_total_hours <= 0:
-        hours_score = 0.8 if commits_count == 0 else 1.0
+        hours_score = 1.2 if commits_count == 0 else 1.6
     elif commits_count == 0 and combined_h <= 0:
-        hours_score = 0.8
+        hours_score = 1.2
     else:
         ratio = combined_h / max(daily_total_hours, 0.01)
         if 0.8 <= ratio <= 1.2:
-            hours_score = 2.0
+            hours_score = 4.0
         elif 0.6 <= ratio < 0.8 or 1.2 < ratio <= 1.5:
-            hours_score = 1.5
+            hours_score = 3.0
         elif 0.4 <= ratio < 0.6 or 1.5 < ratio <= 2.0:
-            hours_score = 1.0
+            hours_score = 2.0
         elif 0.2 <= ratio < 0.4 or 2.0 < ratio <= 3.0:
-            hours_score = 0.5
+            hours_score = 1.0
         else:
             hours_score = 0.2
 
-    # 4) 风险质量（2.5）
+    # 4) 风险质量（2.0）
     if commits_count == 0:
-        risk_score = 2.3
+        risk_score = 1.8
     elif risk_issue_count <= 0:
-        risk_score = 2.5
+        risk_score = 2.0
     elif risk_error_count > 0 or risk_issue_count > 10:
-        risk_score = 2.1
+        risk_score = 1.2
     else:
-        risk_score = 2.3
+        risk_score = 1.6
 
     total_score = round(delivery_score + consistency_score + hours_score + risk_score, 1)
     return {
@@ -268,23 +275,23 @@ def build_system_score_notes(scores: Dict[str, float]) -> List[str]:
     hours = scores["hours"]
     risk = scores["risk"]
 
-    if delivery >= 2.0:
+    if delivery >= 1.7:
         notes.append("交付活跃度较好")
-    elif delivery <= 0.5:
+    elif delivery <= 0.8:
         notes.append("交付活跃度偏弱")
 
-    if consistency >= 2.7:
+    if consistency >= 1.7:
         notes.append("任务关联较清晰")
-    elif consistency <= 1.1:
+    elif consistency <= 0.8:
         notes.append("任务关联度偏弱")
 
-    if hours >= 1.5:
+    if hours >= 3.0:
         notes.append("工时匹配度较好")
     else:
         notes.append("工时匹配度一般")
 
     if len(notes) < 3:
-        if risk >= 2.1:
+        if risk >= 1.6:
             notes.append("本周改动风险可控")
         else:
             notes.append("需关注本周改动风险")
@@ -768,10 +775,10 @@ def generate_markdown_report(
     lines.append("")
     lines.append(f"- **总分：{system_scores['total']:.1f} / 10**")
     lines.append("- **评分明细：**")
-    lines.append(f"  - 交付活跃度：{system_scores['delivery']:.1f} / 2.5")
-    lines.append(f"  - 任务一致性：{system_scores['consistency']:.1f} / 3.0")
-    lines.append(f"  - 工时合理性：{system_scores['hours']:.1f} / 2.0")
-    lines.append(f"  - 风险质量：{system_scores['risk']:.1f} / 2.5")
+    lines.append(f"  - 交付活跃度：{system_scores['delivery']:.1f} / 2.0")
+    lines.append(f"  - 任务一致性：{system_scores['consistency']:.1f} / 2.0")
+    lines.append(f"  - 工时合理性：{system_scores['hours']:.1f} / 4.0")
+    lines.append(f"  - 风险质量：{system_scores['risk']:.1f} / 2.0")
     lines.append("- **评分说明：**")
     for note in score_notes:
         lines.append(f"  - {note}")

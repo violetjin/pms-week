@@ -8,9 +8,10 @@ description: Generate weekly development reports by correlating GitLab commits w
 ## What this skill does
 
 - Fetch weekly activity per developer from GitLab (commits/merge requests)
-- Fetch weekly task records from ZenTao (禅道) via direct SQL queries
-- Correlate code changes with task assignments to assess consistency
+- Fetch weekly task records and daily reported hours from ZenTao (禅道) via direct SQL queries
+- Correlate code changes with task assignments and reported hours
 - Output per-developer weekly reports under `logs/`
+- Generate a section-6 system score card with total 10 points
 
 This skill is designed for **on-prem/self-hosted GitLab** and **direct MySQL access to ZenTao**.
 
@@ -37,8 +38,14 @@ This skill is designed for **on-prem/self-hosted GitLab** and **direct MySQL acc
    - For each developer, compare:
      - GitLab commits (files/modules + intent)
      - ZenTao tasks (system name, task title, classify)
+     - ZenTao daily reported hours vs GitLab-estimated effort
    - Report consistency flag: "high"/"medium"/"low"
    - Flag: commits without matching tasks, or tasks without commits
+   - Compute section-6 system score card with these weights:
+     - 交付活跃度：2.0
+     - 任务一致性：2.0
+     - 工时合理性：4.0
+     - 风险质量：2.0
 
 4. **Output**
    - `logs/开发人员_YYYY-MM-DD_YYYY-MM-DD_week.md`
@@ -96,6 +103,14 @@ This skill is designed for **on-prem/self-hosted GitLab** and **direct MySQL acc
 ## 五、结论与建议
 - 本周交付重点
 - 改进建议
+
+## 六、系统性评分
+- 总分：X / 10
+- 交付活跃度：X / 2.0
+- 任务一致性：X / 2.0
+- 工时合理性：X / 4.0
+- 风险质量：X / 2.0
+- 评分说明：基于提交活跃度、任务ID关联度、日报工时与代码估算工时匹配度、风险扫描结果生成
 ```
 
 ## Run command (cron example)
