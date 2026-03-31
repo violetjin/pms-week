@@ -11,6 +11,7 @@ Outputs:
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Dict
@@ -90,17 +91,48 @@ def estimate_hours_by_churn(commits: List[Dict[str, Any]], loc_per_hour: int = 2
     return total_h
 
 
+def is_merge_commit(commit_title: str) -> bool:
+    """Return True when the commit title is a merge commit."""
+    title = (commit_title or "").strip().lower()
+    return title.startswith("merge ")
+
+
+TASK_ID_PATTERNS = [
+    re.compile(r"#(\d{4,})\b"),
+    re.compile(r"\b(\d{4,})\s*[-:：]"),
+    re.compile(r"^revert\s+[\"'].*?#?(\d{4,})\b", re.IGNORECASE),
+]
+
+
+def extract_task_ids(commit_title: str) -> List[str]:
+    """Extract task ids from commit titles.
+
+    Supports patterns such as:
+    - #44372 xxx
+    - 44372 - xxx
+    - Revert "44372 - xxx"
+    """
+    title = (commit_title or "").strip()
+    if not title or is_merge_commit(title):
+        return []
+
+    found: List[str] = []
+    for pattern in TASK_ID_PATTERNS:
+        for match in pattern.findall(title):
+            task_id = match if isinstance(match, str) else match[0]
+            if task_id and task_id not in found:
+                found.append(task_id)
+    return found
+
+
 def extract_commit_subject(commit_title: str) -> str:
     """Extract module/intent from commit title."""
-    # Try to extract JIRA/zentao task ID or module prefix
-    import re
-    # Example: "feat(report): add merge report" -> "report", "#12345 add merge report"
+    # Try to extract conventional commit module/prefix
     m = re.match(r"^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\s*(.*)$", commit_title, re.IGNORECASE)
     if m:
         return f"{m.group(1)}: {m.group(3)}"
-    # Try #number
-    m = re.search(r"(#\d+)", commit_title)
-    if m:
+    # Try task id
+    if extract_task_ids(commit_title):
         return commit_title
     # Default: first 30 chars
     return commit_title[:30]
@@ -146,12 +178,10 @@ def build_task_summary(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def calculate_consistency(commits: List[Dict[str, Any]], tasks: List[Dict[str, Any]]) -> tuple[str, str]:
     """Estimate consistency between commits and tasks."""
-    # Heuristic: if >80% commits have #taskID, high; if 50-80%, medium; else low
-    import re
     commits_with_taskid = 0
     for c in commits:
         title = c.get("title", "")
-        if re.search(r"#\d+", title):
+        if extract_task_ids(title):
             commits_with_taskid += 1
 
     if not commits:
@@ -221,6 +251,7 @@ def calculate_system_scores(
         else:
             consistency_score = 1.2
 
+<<<<<<< HEAD
     # 3) 工时合理性（2.0）
     if daily_total_hours <= 0:
         hours_score = 0.8 if commits_count == 0 else 1.0
@@ -233,11 +264,28 @@ def calculate_system_scores(
         elif 0.6 <= ratio < 0.8 or 1.2 < ratio <= 1.5:
             hours_score = 1.5
         elif 0.4 <= ratio < 0.6 or 1.5 < ratio <= 2.0:
+=======
+    # 3) 工时合理性（4.0）
+    # 按估算/填报比例单边分档：比例越高代表代码估算覆盖日报工时越充分。
+    if daily_total_hours <= 0:
+        hours_score = 0.5 if commits_count == 0 and combined_h <= 0 else 4.0
+    elif commits_count == 0 and combined_h <= 0:
+        hours_score = 0.5
+    else:
+        ratio = combined_h / max(daily_total_hours, 0.01)
+        if ratio >= 0.8:
+            hours_score = 4.0
+        elif ratio >= 0.6:
+            hours_score = 3.0
+        elif ratio >= 0.4:
+            hours_score = 2.0
+        elif ratio >= 0.2:
+>>>>>>> 279a82e (fix: improve pms-week task id detection)
             hours_score = 1.0
         elif 0.2 <= ratio < 0.4 or 2.0 < ratio <= 3.0:
             hours_score = 0.5
         else:
-            hours_score = 0.2
+            hours_score = 0.5
 
     # 4) 风险质量（2.5）
     if commits_count == 0:
@@ -430,9 +478,10 @@ def generate_markdown_report(
     commits_merge = []  # merge 提交
     for c in commits:
         title = c.get("title", "")
-        if re.search(r"#\d+", title):
+        task_ids = extract_task_ids(title)
+        if task_ids:
             commits_with_taskid += 1
-        elif "Merge" in title or "merge" in title.lower():
+        elif is_merge_commit(title):
             commits_merge.append(title)
         else:
             commits_without_taskid.append(title)
@@ -483,7 +532,7 @@ def generate_markdown_report(
         high_variance_tasks = []
         for ticket_id, daily_h in daily_by_ticket.items():
             # Find commits with this ticket_id
-            ticket_commits = [c for c in commits if f"#{ticket_id}" in c.get("title", "")]
+            ticket_commits = [c for c in commits if str(ticket_id) in extract_task_ids(c.get("title", ""))]
             if ticket_commits:
                 ticket_session_h = estimate_hours_by_session(ticket_commits)
                 ticket_churn_h = estimate_hours_by_churn(ticket_commits)
