@@ -39,6 +39,17 @@ This skill is designed for **on-prem/self-hosted GitLab** and **direct MySQL acc
      - ZenTao tasks (system name, task title, classify)
    - Report consistency flag: "high"/"medium"/"low"
    - Flag: commits without matching tasks, or tasks without commits
+   - Compute section-6 system score card with these weights:
+     - 交付活跃度：2.0
+     - 任务一致性：2.0
+     - 工时合理性：4.0
+     - 风险质量：2.0
+   - 工时合理性按估算/填报比例单边分档：
+     - 高于或等于 0.8：4.0 分
+     - 0.6 ~ 0.8：3.0 分
+     - 0.4 ~ 0.6：2.0 分
+     - 0.2 ~ 0.4：1.0 分
+     - 低于 0.2：0.5 分
 
 4. **Output**
    - `logs/开发人员_YYYY-MM-DD_YYYY-MM-DD_week.md`
@@ -46,9 +57,12 @@ This skill is designed for **on-prem/self-hosted GitLab** and **direct MySQL acc
 
 ## Bundled resources
 
+- `scripts/run_weekly.py`: main weekly pipeline entrypoint
 - `scripts/fetch_gitlab_weekly.py`: fetch commits (wrapper of gitlab_daily.py logic)
 - `scripts/fetch_zentao_weekly.py`: direct SQL query to ZenTao
 - `scripts/analyze_weekly.py`: correlate commits vs tasks, generate markdown report
+- `scripts/generate_weekly_summary.py`: generate weekly summary from the dated log directory
+- `scripts/bak/`: inactive or backup scripts not used by the current `run_weekly.py` flow
 - `references/users.txt`: developer mapping (account|name)
 - `references/groups.txt`: allowlist groups (optional; if absent, fetch all)
 - `references/sql_templates/`: ZenTao query templates
