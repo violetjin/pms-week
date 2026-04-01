@@ -11,6 +11,7 @@ Outputs:
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Dict
@@ -77,30 +78,83 @@ def estimate_hours_by_session(commits: List[Dict[str, Any]], gap_minutes: int = 
     return max(0.0, total.total_seconds() / 3600.0)
 
 
-def estimate_hours_by_churn(commits: List[Dict[str, Any]], loc_per_hour: int = 200, min_h: float = 0.25, max_h: float = 10.0) -> float:
-    """Estimate hours by churn (LOC changed) heuristic."""
-    total_h = 0.0
+def estimate_hours_by_churn(commits: List[Dict[str, Any]], loc_per_hour: int = 100, max_loc_per_day: int = 1000) -> float:
+    """Estimate hours by daily churn heuristic.
+
+    Rules:
+    - Exclude merge commits from churn estimation
+    - Aggregate non-merge LOC by day per developer
+    - Cap each day at max_loc_per_day LOC
+    - Convert by loc_per_hour
+    """
+    from datetime import datetime as dt
+
+    def parse_iso(s: str) -> dt:
+        return dt.fromisoformat(s.replace("Z", "+00:00"))
+
+    loc_by_day: Dict[str, int] = {}
     for c in commits:
+        title = c.get("title", "")
+        if is_merge_commit(title):
+            continue
         churn = (c.get("additions") or 0) + (c.get("deletions") or 0)
         if churn <= 0:
             continue
-        h = churn / float(loc_per_hour)
-        h = max(min_h, min(max_h, h))
-        total_h += h
+        authored = c.get("authored_date", "")
+        if not authored:
+            continue
+        day = parse_iso(authored).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        loc_by_day[day] = loc_by_day.get(day, 0) + churn
+
+    total_h = 0.0
+    for day_loc in loc_by_day.values():
+        effective_loc = min(day_loc, max_loc_per_day)
+        total_h += effective_loc / float(loc_per_hour)
     return total_h
+
+
+def is_merge_commit(commit_title: str) -> bool:
+    """Return True when the commit title is a merge commit."""
+    title = (commit_title or "").strip().lower()
+    return title.startswith("merge ")
+
+
+TASK_ID_PATTERNS = [
+    re.compile(r"#(\d{4,})\b"),
+    re.compile(r"\b(\d{4,})\s*[-:：]"),
+    re.compile(r"^revert\s+[\"'].*?#?(\d{4,})\b", re.IGNORECASE),
+]
+
+
+def extract_task_ids(commit_title: str) -> List[str]:
+    """Extract task ids from commit titles.
+
+    Supports patterns such as:
+    - #44372 xxx
+    - 44372 - xxx
+    - Revert "44372 - xxx"
+    """
+    title = (commit_title or "").strip()
+    if not title or is_merge_commit(title):
+        return []
+
+    found: List[str] = []
+    for pattern in TASK_ID_PATTERNS:
+        for match in pattern.findall(title):
+            task_id = match if isinstance(match, str) else match[0]
+            if task_id and task_id not in found:
+                found.append(task_id)
+    return found
 
 
 def extract_commit_subject(commit_title: str) -> str:
     """Extract module/intent from commit title."""
-    # Try to extract JIRA/zentao task ID or module prefix
-    import re
-    # Example: "feat(report): add merge report" -> "report", "#12345 add merge report"
+    # Try to extract conventional commit module/prefix
     m = re.match(r"^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?:\s*(.*)$", commit_title, re.IGNORECASE)
     if m:
         return f"{m.group(1)}: {m.group(3)}"
-    # Try #number
-    m = re.search(r"(#\d+)", commit_title)
-    if m:
+    # Try task id
+    if extract_task_ids(commit_title):
         return commit_title
     # Default: first 30 chars
     return commit_title[:30]
@@ -144,6 +198,67 @@ def build_task_summary(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def load_or_run_security_scan(tmp_dir: str) -> Dict[str, Any]:
+    """Load cached weekly security scan results or run scans once for the whole week."""
+    import subprocess
+    import json as json_lib
+
+    cache_path = os.path.join(tmp_dir, "security_scan_cache.json")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                return json_lib.load(f)
+        except Exception:
+            pass
+
+    scan_path = os.path.join("/home/jinye/.openclaw/workspace", "gitlab")
+    gitleaks_report = os.path.join(tmp_dir, "gitleaks_weekly.json")
+    semgrep_report = os.path.join(tmp_dir, "semgrep_weekly.json")
+
+    gitleaks_result = []
+    try:
+        print(f"[analyze_weekly] security scan: running gitleaks on {scan_path}", flush=True)
+        result = subprocess.run(
+            ["gitleaks", "detect", "--source", scan_path, "--report-format", "json", "--report-path", gitleaks_report],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode == 0 or result.returncode == 1:
+            with open(gitleaks_report, "r", encoding="utf-8") as f:
+                gitleaks_data = json_lib.load(f)
+            gitleaks_result = gitleaks_data if isinstance(gitleaks_data, list) else gitleaks_data.get("findings", [])
+    except Exception:
+        gitleaks_result = []
+
+    semgrep_result = []
+    try:
+        print(f"[analyze_weekly] security scan: running semgrep on {scan_path}", flush=True)
+        result = subprocess.run(
+            ["semgrep", "--json", "--output", semgrep_report, scan_path],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode == 0:
+            with open(semgrep_report, "r", encoding="utf-8") as f:
+                semgrep_data = json_lib.load(f)
+            semgrep_result = semgrep_data.get("results", [])
+    except Exception:
+        semgrep_result = []
+
+    payload = {
+        "gitleaks_result": gitleaks_result,
+        "semgrep_result": semgrep_result,
+    }
+    try:
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json_lib.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return payload
+
+
 def calculate_consistency(commits: List[Dict[str, Any]], tasks: List[Dict[str, Any]]) -> tuple[str, str]:
     """Estimate consistency between commits and tasks."""
     # Heuristic: if >80% commits have #taskID, high; if 50-80%, medium; else low
@@ -178,76 +293,92 @@ def calculate_system_scores(
     risk_issue_count: int,
     risk_error_count: int,
 ) -> Dict[str, float]:
-    """Generate the section-6 score card used by weekly reports and summary parsing."""
+    """Generate the section-6 score card used by weekly reports and summary parsing.
+
+    New weights (total 10):
+    - 交付活跃度：2.0
+    - 任务一致性：2.0
+    - 工时合理性：4.0
+    - 风险质量：2.0
+    """
     actionable_commits = max(0, commits_count - merge_commits)
 
-    # 1) 交付活跃度（2.5）
+    # 1) 交付活跃度（2.0）
     if commits_count <= 0 and loc_total <= 0:
         if task_count >= 5:
-            delivery_score = 1.8
-        elif task_count >= 4:
-            delivery_score = 1.5
+            delivery_score = 1.4
+        elif task_count >= 3:
+            delivery_score = 1.0
         elif task_count >= 1:
-            delivery_score = 1.2
+            delivery_score = 0.6
         else:
             delivery_score = 0.0
     else:
         if commits_count >= 8 or loc_total >= 2000 or combined_h >= 35:
-            delivery_score = 2.5
+            delivery_score = 2.0
         elif commits_count >= 5 or loc_total >= 1000 or combined_h >= 15:
-            delivery_score = 2.2
+            delivery_score = 1.7
         elif commits_count >= 2 or loc_total >= 200 or combined_h >= 4:
-            delivery_score = 1.9
+            delivery_score = 1.3
         else:
-            delivery_score = 1.5
-        if delivery_score < 1.8 and task_count >= 5:
-            delivery_score = 1.8
+            delivery_score = 0.8
+        if delivery_score < 1.4 and task_count >= 5:
+            delivery_score = 1.4
 
-    # 2) 任务一致性（3.0）
+    # 2) 任务一致性（2.0）
     if commits_count == 0:
-        consistency_score = 1.1 if task_count > 0 else 0.0
+        consistency_score = 0.8 if task_count > 0 else 0.0
     elif actionable_commits <= 0:
-        consistency_score = 3.0 if commits_with_taskid > 0 else 1.6
+        consistency_score = 2.0 if commits_with_taskid > 0 else 1.0
     elif commits_with_taskid == 0:
-        consistency_score = 1.6 if commits_count >= 5 and task_count > 0 else 0.5
+        consistency_score = 1.0 if commits_count >= 5 and task_count > 0 else 0.4
     else:
         task_ratio = commits_with_taskid / max(1, actionable_commits)
         if commits_without_taskid_count == 0:
-            consistency_score = 3.0
+            consistency_score = 2.0
         elif task_ratio >= 0.75:
-            consistency_score = 2.7
+            consistency_score = 1.7
         elif task_ratio >= 0.40:
-            consistency_score = 1.6
+            consistency_score = 1.1
         else:
-            consistency_score = 1.2
+            consistency_score = 0.7
 
-    # 3) 工时合理性（2.0）
+    # 3) 工时合理性（4.0）
+    # 按估算/填报比例单边分档：比例越高代表代码估算覆盖日报工时越充分。
     if daily_total_hours <= 0:
-        hours_score = 0.8 if commits_count == 0 else 1.0
+        hours_score = 0.3 if commits_count == 0 and combined_h <= 0 else 4.0
     elif commits_count == 0 and combined_h <= 0:
-        hours_score = 0.8
+        hours_score = 0.3
     else:
         ratio = combined_h / max(daily_total_hours, 0.01)
-        if 0.8 <= ratio <= 1.2:
+        if ratio >= 0.9:
+            hours_score = 4.0
+        elif ratio >= 0.8:
+            hours_score = 3.5
+        elif ratio >= 0.7:
+            hours_score = 3.0
+        elif ratio >= 0.6:
+            hours_score = 2.5
+        elif ratio >= 0.5:
             hours_score = 2.0
-        elif 0.6 <= ratio < 0.8 or 1.2 < ratio <= 1.5:
+        elif ratio >= 0.4:
             hours_score = 1.5
-        elif 0.4 <= ratio < 0.6 or 1.5 < ratio <= 2.0:
+        elif ratio >= 0.3:
             hours_score = 1.0
-        elif 0.2 <= ratio < 0.4 or 2.0 < ratio <= 3.0:
+        elif ratio >= 0.2:
             hours_score = 0.5
         else:
-            hours_score = 0.2
+            hours_score = 0.3
 
-    # 4) 风险质量（2.5）
+    # 4) 风险质量（2.0）
     if commits_count == 0:
-        risk_score = 2.3
+        risk_score = 1.8
     elif risk_issue_count <= 0:
-        risk_score = 2.5
+        risk_score = 2.0
     elif risk_error_count > 0 or risk_issue_count > 10:
-        risk_score = 2.1
+        risk_score = 1.2
     else:
-        risk_score = 2.3
+        risk_score = 1.6
 
     total_score = round(delivery_score + consistency_score + hours_score + risk_score, 1)
     return {
@@ -268,23 +399,23 @@ def build_system_score_notes(scores: Dict[str, float]) -> List[str]:
     hours = scores["hours"]
     risk = scores["risk"]
 
-    if delivery >= 2.0:
+    if delivery >= 1.7:
         notes.append("交付活跃度较好")
-    elif delivery <= 0.5:
+    elif delivery <= 0.8:
         notes.append("交付活跃度偏弱")
 
-    if consistency >= 2.7:
+    if consistency >= 1.7:
         notes.append("任务关联较清晰")
-    elif consistency <= 1.1:
+    elif consistency <= 0.8:
         notes.append("任务关联度偏弱")
 
-    if hours >= 1.5:
+    if hours >= 3.0:
         notes.append("工时匹配度较好")
     else:
         notes.append("工时匹配度一般")
 
     if len(notes) < 3:
-        if risk >= 2.1:
+        if risk >= 1.6:
             notes.append("本周改动风险可控")
         else:
             notes.append("需关注本周改动风险")
@@ -317,6 +448,12 @@ def generate_markdown_report(
     session_h = estimate_hours_by_session(commits)
     churn_h = estimate_hours_by_churn(commits)
     combined_h = max(session_h, churn_h)
+    merge_loc_total = sum(
+        ((c.get("additions") or 0) + (c.get("deletions") or 0))
+        for c in commits
+        if is_merge_commit(c.get("title", ""))
+    )
+    non_merge_loc_total = max(0, git_counts.get('loc_total', 0) - merge_loc_total)
 
     # Date range - parse from GitLab data (UTC timezone)
     range_from = gitlab_data.get("date_range", {}).get("from_iso", "")
@@ -346,9 +483,12 @@ def generate_markdown_report(
     lines.append("## 一、GitLab 提交概览")
     lines.append("")
     lines.append(f"- 提交次数：{git_counts.get('commits', 0)} commits")
-    lines.append(f"- 代码变更量：{git_counts.get('loc_total', 0)} LOC")
-    lines.append(f"- 估算投入：{combined_h:.2f} 小时（combined: session+churn）")
-    lines.append(f"- 效率指标：LOC/h ≈ {round(git_counts.get('loc_total', 0) / max(combined_h, 0.01), 0)}, commits/h ≈ {round(git_counts.get('commits', 0) / max(combined_h, 0.01), 2)}")
+    if merge_loc_total > 0:
+        lines.append(f"- 代码变更量：{git_counts.get('loc_total', 0)} LOC（Merge:{merge_loc_total}，估算按非 Merge {non_merge_loc_total} LOC 参与）")
+    else:
+        lines.append(f"- 代码变更量：{git_counts.get('loc_total', 0)} LOC")
+    lines.append(f"- 估算投入：{combined_h:.2f} 小时（combined: session+churn；churn=100 LOC/小时，Merge 不计入，每日最多按 1000 LOC）")
+    lines.append(f"- 效率指标：LOC/h ≈ {round(non_merge_loc_total / max(combined_h, 0.01), 0)}, commits/h ≈ {round(git_counts.get('commits', 0) / max(combined_h, 0.01), 2)}")
     lines.append("")
     lines.append("### 按项目汇总")
     for s in git_summary:
@@ -368,26 +508,13 @@ def generate_markdown_report(
     for sys, cnt in zt_summary['by_system'].items():
         lines.append(f"- {sys}：{cnt}")
     lines.append("")
-    lines.append("### 任务列表")
-    if tasks:
-        for t in tasks:
-            ticket_id = t.get('任务ID', '')
-            title = t.get('任务标题', '')
-            system = t.get('系统名称', '')
-            if ticket_id:
-                lines.append(f"- #{ticket_id} {title}（{system}）")
-            else:
-                lines.append(f"- {title}（{system}）")
-    else:
-        lines.append("（无任务记录）")
-    lines.append("")
-    
-    # 日报汇总
+    # 日报汇总（部分任务扩展字段优先从日报明细回填）
     daily_reports = user_zt.get("daily_reports", [])
     daily_total_hours = 0.0
     daily_by_ticket: Dict[str, float] = {}
     daily_by_date: Dict[str, float] = {}
     ticket_titles: Dict[str, str] = {}  # 存储任务ID和标题的映射
+    daily_task_fields: Dict[str, Dict[str, Any]] = {}
     if daily_reports:
         for d in daily_reports:
             hours = float(d.get("任务花费时间") or 0)
@@ -395,14 +522,69 @@ def generate_markdown_report(
             ticket_id = d.get("任务ID")
             ticket_title = d.get("任务标题", "")
             if ticket_id:
-                daily_by_ticket[str(ticket_id)] = daily_by_ticket.get(str(ticket_id), 0.0) + hours
+                tid = str(ticket_id)
+                daily_by_ticket[tid] = daily_by_ticket.get(tid, 0.0) + hours
                 # 保存任务标题（只保存一次）
-                if str(ticket_id) not in ticket_titles and ticket_title:
-                    ticket_titles[str(ticket_id)] = ticket_title
+                if tid not in ticket_titles and ticket_title:
+                    ticket_titles[tid] = ticket_title
+                # 保存扩展字段（只要有值就回填）
+                if tid not in daily_task_fields:
+                    daily_task_fields[tid] = {}
+                for key in ["完成度", "任务分类", "知识库链接", "知识库", "链接"]:
+                    val = d.get(key)
+                    if val not in (None, "") and key not in daily_task_fields[tid]:
+                        daily_task_fields[tid][key] = val
             report_date = d.get("填报日期", "")
             if report_date:
                 daily_by_date[report_date] = daily_by_date.get(report_date, 0.0) + hours
-    
+
+    lines.append("### 任务列表")
+    if tasks:
+        seen_task_keys = set()
+        unique_tasks = []
+        for t in tasks:
+            ticket_id = str(t.get('任务ID', '') or '').strip()
+            title = (t.get('任务标题', '') or '').strip()
+            task_key = ticket_id or title
+            if task_key in seen_task_keys:
+                continue
+            seen_task_keys.add(task_key)
+            unique_tasks.append(t)
+
+        for t in unique_tasks:
+            ticket_id = str(t.get('任务ID', '') or '').strip()
+            title = t.get('任务标题', '')
+            system = t.get('系统名称', '')
+            task_class = t.get('任务分类', '') or daily_task_fields.get(ticket_id, {}).get('任务分类', '')
+            progress = t.get('完成度', '') or daily_task_fields.get(ticket_id, {}).get('完成度', '')
+            kb_link = (
+                t.get('知识库链接', '')
+                or t.get('知识库', '')
+                or t.get('链接', '')
+                or daily_task_fields.get(ticket_id, {}).get('知识库链接', '')
+                or daily_task_fields.get(ticket_id, {}).get('知识库', '')
+                or daily_task_fields.get(ticket_id, {}).get('链接', '')
+            )
+            if ticket_id:
+                lines.append(f"- #{ticket_id} {title}（{system}）")
+            else:
+                lines.append(f"- {title}（{system}）")
+            if progress not in (None, ""):
+                lines.append(f" - 完成度：{progress}")
+            if task_class:
+                lines.append(f" - 任务分类：{task_class}")
+            if kb_link:
+                lines.append(f" - 知识库链接：{kb_link}")
+
+            if ticket_id:
+                task_commits = [c for c in commits if ticket_id in extract_task_ids(c.get("title", ""))]
+                commit_count = len(task_commits)
+                lines.append(f" - 代码提交记录：{commit_count}次")
+            else:
+                lines.append(" - 代码提交记录：0次")
+    else:
+        lines.append("（无任务记录）")
+    lines.append("")
     lines.append("### 日报汇总")
     lines.append(f"- 日报填报总工时：{daily_total_hours:.2f} 小时")
     if daily_by_date:
@@ -430,9 +612,10 @@ def generate_markdown_report(
     commits_merge = []  # merge 提交
     for c in commits:
         title = c.get("title", "")
-        if re.search(r"#\d+", title):
+        task_ids = extract_task_ids(title)
+        if task_ids:
             commits_with_taskid += 1
-        elif "Merge" in title or "merge" in title.lower():
+        elif is_merge_commit(title):
             commits_merge.append(title)
         else:
             commits_without_taskid.append(title)
@@ -483,7 +666,7 @@ def generate_markdown_report(
         high_variance_tasks = []
         for ticket_id, daily_h in daily_by_ticket.items():
             # Find commits with this ticket_id
-            ticket_commits = [c for c in commits if f"#{ticket_id}" in c.get("title", "")]
+            ticket_commits = [c for c in commits if str(ticket_id) in extract_task_ids(c.get("title", ""))]
             if ticket_commits:
                 ticket_session_h = estimate_hours_by_session(ticket_commits)
                 ticket_churn_h = estimate_hours_by_churn(ticket_commits)
@@ -540,39 +723,9 @@ def generate_markdown_report(
         # 构建扫描路径：只扫描 workspace 下的 gitlab 目录（属于 groups 的项目）
         scan_path = os.path.join("/home/jinye/.openclaw/workspace", "gitlab")
         
-        gitleaks_report = os.path.join(tmp_dir, f"gitleaks_{os.path.basename(output_path)}.json")
-        
-        gitleaks_result = []
-        try:
-            result = subprocess.run(
-                ["gitleaks", "detect", "--source", scan_path, "--report-format", "json", "--report-path", gitleaks_report],
-                capture_output=True,
-                text=True,
-                timeout=180
-            )
-            if result.returncode == 0 or result.returncode == 1:
-                with open(gitleaks_report, "r") as f:
-                    gitleaks_data = json_lib.load(f)
-                gitleaks_result = gitleaks_data if isinstance(gitleaks_data, list) else gitleaks_data.get("findings", [])
-        except Exception as e:
-            gitleaks_result = []
-        
-        # 运行 semgrep 扫描
-        semgrep_report = os.path.join(tmp_dir, f"semgrep_{os.path.basename(output_path)}.json")
-        semgrep_result = []
-        try:
-            result = subprocess.run(
-                ["semgrep", "--json", "--output", semgrep_report, scan_path],
-                capture_output=True,
-                text=True,
-                timeout=180
-            )
-            if result.returncode == 0:
-                with open(semgrep_report, "r") as f:
-                    semgrep_data = json_lib.load(f)
-                semgrep_result = semgrep_data.get("results", [])
-        except Exception as e:
-            semgrep_result = []
+        scan_cache = load_or_run_security_scan(tmp_dir)
+        gitleaks_result = scan_cache.get("gitleaks_result", [])
+        semgrep_result = scan_cache.get("semgrep_result", [])
         
         # 按项目分组 gitleaks 结果（只统计 workspace 下 bdo- 开头的项目）
         gitleaks_by_project: Dict[str, Dict[str, int]] = {}
@@ -768,10 +921,10 @@ def generate_markdown_report(
     lines.append("")
     lines.append(f"- **总分：{system_scores['total']:.1f} / 10**")
     lines.append("- **评分明细：**")
-    lines.append(f"  - 交付活跃度：{system_scores['delivery']:.1f} / 2.5")
-    lines.append(f"  - 任务一致性：{system_scores['consistency']:.1f} / 3.0")
-    lines.append(f"  - 工时合理性：{system_scores['hours']:.1f} / 2.0")
-    lines.append(f"  - 风险质量：{system_scores['risk']:.1f} / 2.5")
+    lines.append(f"  - 交付活跃度：{system_scores['delivery']:.1f} / 2.0")
+    lines.append(f"  - 任务一致性：{system_scores['consistency']:.1f} / 2.0")
+    lines.append(f"  - 工时合理性：{system_scores['hours']:.1f} / 4.0")
+    lines.append(f"  - 风险质量：{system_scores['risk']:.1f} / 2.0")
     lines.append("- **评分说明：**")
     for note in score_notes:
         lines.append(f"  - {note}")
